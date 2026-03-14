@@ -18,6 +18,8 @@ namespace WGClientWifiSwitcher
         {
             base.OnStartup(e);
 
+            if (!CheckDependencies()) return;
+
             // app.manifest already requests requireAdministrator, so by the time
             // we get here the process is already elevated (or the user cancelled UAC).
             // No runtime re-launch needed — just start.
@@ -37,11 +39,176 @@ namespace WGClientWifiSwitcher
             SetupTrayIcon();
         }
 
+        private bool CheckDependencies()
+        {
+            var issues = new System.Collections.Generic.List<(string title, string detail)>();
+
+            // Check WireGuard is installed
+            var wgExe = WGClientWifiSwitcher.MainWindow.FindWireGuardExe();
+            if (wgExe == null)
+                issues.Add(("WireGuard not found",
+                    "Could not locate wireguard.exe.\n\nInstall WireGuard for Windows from wireguard.com/install and relaunch."));
+
+            if (issues.Count == 0) return true;
+
+            // Show a styled error window
+            ShowDependencyError(issues);
+            Shutdown();
+            return false;
+        }
+
+        private void ShowDependencyError(System.Collections.Generic.List<(string title, string detail)> issues)
+        {
+            // colours
+            var bg      = System.Windows.Media.Color.FromRgb(13,  17,  23);
+            var panel   = System.Windows.Media.Color.FromRgb(22,  27,  34);
+            var border  = System.Windows.Media.Color.FromRgb(48,  54,  61);
+            var accent  = System.Windows.Media.Color.FromRgb(88, 166, 255);
+            var textC   = System.Windows.Media.Color.FromRgb(230, 237, 243);
+            var subC    = System.Windows.Media.Color.FromRgb(139, 148, 158);
+            var warn    = System.Windows.Media.Color.FromRgb(247, 129, 102);
+            var green   = System.Windows.Media.Color.FromRgb(63,  185,  80);
+
+            System.Windows.Media.Brush Br(System.Windows.Media.Color c) =>
+                new System.Windows.Media.SolidColorBrush(c);
+
+            var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(24, 16, 24, 20) };
+
+            // Header
+            stack.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text       = "⚠  Missing dependencies",
+                FontFamily = new System.Windows.Media.FontFamily("Consolas"),
+                FontSize   = 15, FontWeight = FontWeights.Bold,
+                Foreground = Br(warn),
+                Margin     = new Thickness(0, 0, 0, 12)
+            });
+
+            stack.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text         = "WireGuard Client and WiFi Switcher could not start because the following requirements are not met:",
+                FontFamily   = new System.Windows.Media.FontFamily("Consolas"),
+                FontSize     = 11, Foreground = Br(subC),
+                TextWrapping = System.Windows.TextWrapping.Wrap,
+                Margin       = new Thickness(0, 0, 0, 16)
+            });
+
+            foreach (var (title, detail) in issues)
+            {
+                var card = new System.Windows.Controls.Border
+                {
+                    Background      = Br(panel),
+                    BorderBrush     = Br(border),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius    = new CornerRadius(4),
+                    Padding         = new Thickness(14, 10, 14, 10),
+                    Margin          = new Thickness(0, 0, 0, 10)
+                };
+                var inner = new System.Windows.Controls.StackPanel();
+                inner.Children.Add(new System.Windows.Controls.TextBlock
+                {
+                    Text       = title,
+                    FontFamily = new System.Windows.Media.FontFamily("Consolas"),
+                    FontSize   = 12, FontWeight = FontWeights.Bold,
+                    Foreground = Br(textC), Margin = new Thickness(0, 0, 0, 4)
+                });
+                inner.Children.Add(new System.Windows.Controls.TextBlock
+                {
+                    Text         = detail,
+                    FontFamily   = new System.Windows.Media.FontFamily("Consolas"),
+                    FontSize     = 10, Foreground = Br(subC),
+                    TextWrapping = System.Windows.TextWrapping.Wrap
+                });
+                card.Child = inner;
+                stack.Children.Add(card);
+            }
+
+            // GitHub link
+            var linkPanel = new System.Windows.Controls.StackPanel
+            {
+                Orientation = System.Windows.Controls.Orientation.Horizontal,
+                Margin      = new Thickness(0, 8, 0, 0)
+            };
+            linkPanel.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = "For installation instructions visit: ",
+                FontFamily = new System.Windows.Media.FontFamily("Consolas"),
+                FontSize = 10, Foreground = Br(subC),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            var linkBtn = new System.Windows.Controls.Button
+            {
+                Content         = "github.com/masselink/WGClientWifiSwitcher",
+                FontFamily      = new System.Windows.Media.FontFamily("Consolas"),
+                FontSize        = 10,
+                Foreground      = Br(accent),
+                Background      = System.Windows.Media.Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Cursor          = System.Windows.Input.Cursors.Hand,
+                Padding         = new Thickness(0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            linkBtn.Click += (_, _) =>
+                Process.Start(new ProcessStartInfo("https://github.com/masselink/WGClientWifiSwitcher")
+                    { UseShellExecute = true });
+            linkPanel.Children.Add(linkBtn);
+            stack.Children.Add(linkPanel);
+
+            // Close button
+            var closeBtn = new System.Windows.Controls.Button
+            {
+                Content         = "Close",
+                FontFamily      = new System.Windows.Media.FontFamily("Consolas"),
+                FontSize        = 11,
+                Foreground      = Br(textC),
+                Background      = Br(panel),
+                BorderBrush     = Br(border),
+                BorderThickness = new Thickness(1),
+                Padding         = new Thickness(20, 6, 20, 6),
+                Margin          = new Thickness(0, 16, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Cursor          = System.Windows.Input.Cursors.Hand
+            };
+
+            stack.Children.Add(closeBtn);
+
+            var outerBorder = new System.Windows.Controls.Border
+            {
+                Background      = Br(bg),
+                BorderBrush     = Br(border),
+                BorderThickness = new Thickness(1),
+                CornerRadius    = new CornerRadius(6),
+                Child           = stack
+            };
+
+            var win = new Window
+            {
+                Title              = "WireGuard Client and WiFi Switcher — Setup required",
+                Width              = 560,
+                SizeToContent      = SizeToContent.Height,
+                WindowStyle        = WindowStyle.None,
+                AllowsTransparency = true,
+                Background         = System.Windows.Media.Brushes.Transparent,
+                ResizeMode         = ResizeMode.NoResize,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                Content            = outerBorder
+            };
+
+            // Drag via the card background
+            outerBorder.MouseLeftButtonDown += (_, mev) =>
+            {
+                if (mev.LeftButton == System.Windows.Input.MouseButtonState.Pressed) win.DragMove();
+            };
+            closeBtn.Click += (_, _) => win.Close();
+
+            win.ShowDialog();
+        }
+
         private void SetupTrayIcon()
         {
             _trayIcon = new WinForms.NotifyIcon
             {
-                Text = "WireGuard Client and WiFi Switcher 0.7 beta",
+                Text = "WireGuard Client and WiFi Switcher v0.8 beta",
                 Visible = true,
                 Icon = TrayIconHelper.CreateIcon()
             };

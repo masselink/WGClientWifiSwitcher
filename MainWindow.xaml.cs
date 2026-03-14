@@ -7,10 +7,14 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Win32;
 using System.ServiceProcess;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -69,7 +73,17 @@ namespace WGClientWifiSwitcher
         public List<TunnelRule> Rules         { get; set; } = new();
         public string           DefaultAction { get; set; } = "none";
         public string           DefaultTunnel { get; set; } = "";
-        public string           ConfDirectory { get; set; } = @"C:\Program Files\WireGuard\Data\Configurations";
+        public string           InstallDirectory { get; set; } = @"C:\Program Files\WireGuard";
+
+        [JsonIgnore]
+        public string ConfDirectory => string.IsNullOrWhiteSpace(InstallDirectory)
+            ? ""
+            : Path.Combine(InstallDirectory, @"Data\Configurations");
+
+        [JsonIgnore]
+        public string WgExePath => string.IsNullOrWhiteSpace(InstallDirectory)
+            ? "wireguard"
+            : Path.Combine(InstallDirectory, "wireguard.exe");
     }
 
     public partial class MainWindow : Window
@@ -85,11 +99,59 @@ namespace WGClientWifiSwitcher
         private readonly DispatcherTimer _timer = new();
         private bool _loading = false;
 
-        // WireGuard executable
-        private static readonly string WgExe =
-            File.Exists(@"C:\Program Files\WireGuard\wireguard.exe")
-                ? @"C:\Program Files\WireGuard\wireguard.exe"
-                : "wireguard";
+        // WireGuard executable — derived from configured install directory
+        private static string WgExe => _cfg.WgExePath;
+
+        // Called by App before MainWindow is created to validate dependencies
+        public static string? FindWireGuardExe()
+        {
+            // Try registry-detected path first
+            var detected = DetectWireGuardInstallDir();
+            if (detected != null)
+            {
+                var path = System.IO.Path.Combine(detected, "wireguard.exe");
+                if (File.Exists(path)) return path;
+            }
+            // Fallback: just check Program Files
+            var def = @"C:\Program Files\WireGuard\wireguard.exe";
+            return File.Exists(def) ? def : null;
+        }
+
+        // Auto-detect WireGuard install directory from the registry, then common paths
+        private static string? DetectWireGuardInstallDir()
+        {
+            // 1. Registry: HKLM\SOFTWARE\WireGuard — InstallDirectory value
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WireGuard");
+                if (key?.GetValue("InstallDirectory") is string dir && Directory.Exists(dir))
+                    return dir.TrimEnd('\\', '/');
+            }
+            catch { }
+
+            // 2. Registry: uninstall entry written by the WireGuard NSIS installer
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(
+                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\WireGuard");
+                if (key?.GetValue("InstallLocation") is string dir && Directory.Exists(dir))
+                    return dir.TrimEnd('\\', '/');
+            }
+            catch { }
+
+            // 3. Well-known default paths
+            foreach (var candidate in new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WireGuard"),
+                @"C:\WireGuard",
+            })
+            {
+                if (File.Exists(Path.Combine(candidate, "wireguard.exe")))
+                    return candidate;
+            }
+
+            return null;
+        }
 
         // Search known locations for a tunnel's .conf file
         private static string? FindConfPath(string tunnel, out string searched)
@@ -142,13 +204,26 @@ namespace WGClientWifiSwitcher
         private static List<string> GetTunnelsFromFiles()
         {
             var candidates = new List<string>();
+
+            // Configured install dir → derive conf path
             if (!string.IsNullOrWhiteSpace(_cfg.ConfDirectory))
                 candidates.Add(_cfg.ConfDirectory);
+
+            // Registry auto-detect
+            var detected = DetectWireGuardInstallDir();
+            if (detected != null)
+            {
+                var detectedConf = Path.Combine(detected, "Data", "Configurations");
+                if (!candidates.Contains(detectedConf, StringComparer.OrdinalIgnoreCase))
+                    candidates.Add(detectedConf);
+            }
             candidates.AddRange(new[]
             {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),       "WireGuard", "Data", "Configurations"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),  "WireGuard", "Data", "Configurations"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "WireGuard", "Data", "Configurations"),
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),       "WireGuard"),
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),  "WireGuard"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "WireGuard"),
                 @"C:\Program Files\WireGuard\Data\Configurations",
                 @"C:\ProgramData\WireGuard",
             });
@@ -175,8 +250,15 @@ namespace WGClientWifiSwitcher
                         .ToList();
                     if (found.Count > 0)
                     {
-                        if (_cfg.ConfDirectory != candidate)
-                            _cfg.ConfDirectory = candidate;
+                        // Back-derive the install directory from the conf folder
+                        var expectedSuffix = Path.DirectorySeparatorChar + "Data" +
+                                             Path.DirectorySeparatorChar + "Configurations";
+                        if (candidate.EndsWith(expectedSuffix, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var install = candidate.Substring(0, candidate.Length - expectedSuffix.Length);
+                            if (!string.Equals(_cfg.InstallDirectory, install, StringComparison.OrdinalIgnoreCase))
+                                _cfg.InstallDirectory = install;
+                        }
                         return found;
                     }
                 }
@@ -288,10 +370,20 @@ namespace WGClientWifiSwitcher
             // Register for instant WiFi change notifications via WlanApi
             RegisterWifiEvents();
 
-            // Set initial state
+            // Set initial state — detect WiFi and apply rules immediately
             var wifi = GetCurrentSsid();
             _lastWifi = wifi;
             UpdateStatusDisplay(wifi);
+            if (wifi != null)
+            {
+                Log("Startup WiFi: " + wifi + " — applying rules.", LogLevel.Info);
+                ApplyRules(wifi);
+            }
+            else
+            {
+                Log("Startup: no WiFi connection detected.", LogLevel.Info);
+                ApplyRules(null);
+            }
         }
 
         // Called by WlanApi callback when connection state changes
@@ -604,7 +696,6 @@ namespace WGClientWifiSwitcher
 
                 RefreshTunnelDropdowns();
                 DefaultTunnelBox.Text = _cfg.DefaultTunnel;
-                ConfDirBox.Text       = _cfg.ConfDirectory;  // update in case auto-detected
                 _loading = false;
             }
         }
@@ -696,17 +787,13 @@ namespace WGClientWifiSwitcher
 
             Log("Tunnel discovery: found " + tunnels.Count + " tunnel(s)" +
                 (tunnels.Count > 0 ? ": " + string.Join(", ", tunnels) : "") +
-                "  [conf dir: " + (_cfg.ConfDirectory ?? "none") + "]", LogLevel.Info);
+                "  [install dir: " + (_cfg.InstallDirectory ?? "none") + "]", LogLevel.Info);
 
             // Update DefaultTunnelBox ComboBox
             var prev = DefaultTunnelBox.Text;
             DefaultTunnelBox.Items.Clear();
             foreach (var t in tunnels) DefaultTunnelBox.Items.Add(t);
             DefaultTunnelBox.Text = prev;
-
-            // Update ConfDirBox to reflect auto-detected path
-            if (!string.IsNullOrWhiteSpace(_cfg.ConfDirectory))
-                ConfDirBox.Text = _cfg.ConfDirectory;
 
             // Rebuild tunnel panel list
             var active = GetActiveTunnelNames();
@@ -769,32 +856,221 @@ namespace WGClientWifiSwitcher
             UpdateStatusDisplay();
         }
 
-        private void ConfDirBox_LostFocus(object sender, RoutedEventArgs e)
+        private void OpenWireGuardGui_Click(object sender, RoutedEventArgs e)
         {
-            if (_loading) return;
-            _cfg.ConfDirectory = ConfDirBox.Text.Trim();
-            RefreshTunnelDropdowns();
-            SaveConfig();
+            try
+            {
+                var exe = WgExe;
+                if (!File.Exists(exe))
+                {
+                    Log("wireguard.exe not found at: " + exe, LogLevel.Warn);
+                    return;
+                }
+                Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true });
+                Log("Opened WireGuard GUI.", LogLevel.Ok);
+            }
+            catch (Exception ex) { Log("Failed to open WireGuard GUI: " + ex.Message, LogLevel.Warn); }
         }
 
-        private void BrowseConfDir_Click(object sender, RoutedEventArgs e)
+        private void ShowWireGuardLog_Click(object sender, RoutedEventArgs e)
         {
-            using var dlg = new System.Windows.Forms.FolderBrowserDialog
+            try
             {
-                Description        = "Select the folder containing your WireGuard .conf files",
-                UseDescriptionForTitle = true,
-                SelectedPath       = Directory.Exists(_cfg.ConfDirectory)
-                                        ? _cfg.ConfDirectory
-                                        : Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
-            };
-            if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-            {
-                _cfg.ConfDirectory = dlg.SelectedPath;
-                ConfDirBox.Text    = dlg.SelectedPath;
-                SaveConfig();
-                RefreshTunnelDropdowns();
-                Log("Config folder set to: " + dlg.SelectedPath, LogLevel.Ok);
+                var exe = WgExe;
+                if (!File.Exists(exe))
+                {
+                    Log("wireguard.exe not found at: " + exe, LogLevel.Warn);
+                    return;
+                }
+
+                // Frameless dark window matching app style
+                var bgBrush   = (SolidColorBrush)FindResource("Bg");
+                var panelBrush = (SolidColorBrush)FindResource("Panel");
+                var borderBrush = (SolidColorBrush)FindResource("Border");
+                var cardBrush  = (SolidColorBrush)FindResource("Card");
+                var textBrush  = (SolidColorBrush)FindResource("Text");
+                var accentBrush = (SolidColorBrush)FindResource("Accent");
+
+                var tb = new System.Windows.Controls.TextBox
+                {
+                    IsReadOnly          = true,
+                    FontFamily          = new System.Windows.Media.FontFamily("Consolas"),
+                    FontSize            = 11,
+                    Background          = cardBrush,
+                    Foreground          = textBrush,
+                    BorderThickness     = new Thickness(0),
+                    VerticalScrollBarVisibility   = System.Windows.Controls.ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+                    TextWrapping        = System.Windows.TextWrapping.NoWrap,
+                    Padding             = new Thickness(10),
+                    Text                = ""
+                };
+
+                // Title bar
+                var titleText = new TextBlock
+                {
+                    Text       = "WireGuard Log",
+                    FontFamily = new System.Windows.Media.FontFamily("Consolas"),
+                    FontSize   = 13,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = accentBrush,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin     = new Thickness(14, 0, 0, 0)
+                };
+
+                var tailLabel = new TextBlock
+                {
+                    Text       = "● last 24h + live",
+                    FontFamily = new System.Windows.Media.FontFamily("Consolas"),
+                    FontSize   = 10,
+                    Foreground = (SolidColorBrush)FindResource("Green"),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin     = new Thickness(0, 0, 12, 0)
+                };
+
+                var closeBtn = new System.Windows.Controls.Button
+                {
+                    Content         = "✕",
+                    Style           = (Style)FindResource("DangerBtn"),
+                    Padding         = new Thickness(10, 4, 10, 4),
+                    BorderThickness = new Thickness(0),
+                    Background      = Brushes.Transparent,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin          = new Thickness(0, 0, 4, 0)
+                };
+
+                var titleBar = new System.Windows.Controls.Grid
+                {
+                    Background = panelBrush,
+                    Height     = 44
+                };
+                titleBar.Children.Add(titleText);
+                var rightStack = new System.Windows.Controls.StackPanel
+                {
+                    Orientation       = System.Windows.Controls.Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment   = VerticalAlignment.Center
+                };
+                rightStack.Children.Add(tailLabel);
+                rightStack.Children.Add(closeBtn);
+                titleBar.Children.Add(rightStack);
+
+                var outerBorder = new System.Windows.Controls.Border
+                {
+                    BorderBrush     = borderBrush,
+                    BorderThickness = new Thickness(1),
+                    CornerRadius    = new CornerRadius(6)
+                };
+
+                var root = new System.Windows.Controls.Grid();
+                root.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = GridLength.Auto });
+                root.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                System.Windows.Controls.Grid.SetRow(titleBar, 0);
+                System.Windows.Controls.Grid.SetRow(tb, 1);
+                root.Children.Add(titleBar);
+                root.Children.Add(tb);
+                outerBorder.Child = root;
+
+                var win = new Window
+                {
+                    Title               = "WireGuard Log",
+                    Width               = 920,
+                    Height              = 620,
+                    Background          = bgBrush,
+                    WindowStyle         = WindowStyle.None,
+                    AllowsTransparency  = true,
+                    ResizeMode          = ResizeMode.CanResizeWithGrip,
+                    Owner               = this,
+                    Content             = outerBorder
+                };
+
+                closeBtn.Click += (_, _) => win.Close();
+                titleBar.MouseLeftButtonDown += (_, mev) => { if (mev.LeftButton == System.Windows.Input.MouseButtonState.Pressed) win.DragMove(); };
+
+                // Helper: filter raw dumplog output to lines from the last 24 hours
+                string[] FilterRecent(string raw)
+                {
+                    var cutoff = DateTime.Now.AddDays(-1);
+                    return raw.Split('\n').Where(l =>
+                    {
+                        if (l.Length >= 19 &&
+                            DateTime.TryParseExact(l.Substring(0, 19), "yyyy/MM/dd HH:mm:ss",
+                                System.Globalization.CultureInfo.InvariantCulture,
+                                System.Globalization.DateTimeStyles.None, out var dt))
+                            return dt >= cutoff;
+                        return l.TrimEnd().Length > 0;
+                    }).ToArray();
+                }
+
+                // Step 1: load last 24h history with a plain /dumplog (exits immediately)
+                try
+                {
+                    var histPsi = new ProcessStartInfo(exe, "/dumplog")
+                    {
+                        UseShellExecute        = false,
+                        RedirectStandardOutput = true,
+                        CreateNoWindow         = true
+                    };
+                    using var histProc = Process.Start(histPsi)!;
+                    var histText = histProc.StandardOutput.ReadToEnd();
+                    histProc.WaitForExit(8000);
+                    var histLines = FilterRecent(histText);
+                    if (histLines.Length > 0)
+                    {
+                        tb.Text = string.Join("\n", histLines) + "\n";
+                        tb.ScrollToEnd();
+                    }
+                }
+                catch { /* if history fails, start fresh */ }
+
+                // Step 2: start /dumplog /tail — streams new lines to stdout as they arrive
+                var tailProc = new Process
+                {
+                    StartInfo = new ProcessStartInfo(exe, "/dumplog /tail")
+                    {
+                        UseShellExecute        = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError  = true,
+                        CreateNoWindow         = true
+                    },
+                    EnableRaisingEvents = true
+                };
+
+                tailProc.OutputDataReceived += (_, args) =>
+                {
+                    if (string.IsNullOrEmpty(args.Data)) return;
+                    var line = args.Data;
+                    Dispatcher.BeginInvoke(() => { tb.AppendText(line + "\n"); tb.ScrollToEnd(); });
+                };
+                tailProc.ErrorDataReceived += (_, args) =>
+                {
+                    if (string.IsNullOrEmpty(args.Data)) return;
+                    var line = args.Data;
+                    Dispatcher.BeginInvoke(() => { tb.AppendText(line + "\n"); tb.ScrollToEnd(); });
+                };
+                tailProc.Exited += (_, _) =>
+                {
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        tailLabel.Text       = "● stopped";
+                        tailLabel.Foreground = (SolidColorBrush)FindResource("Sub");
+                    });
+                };
+
+                tailProc.Start();
+                tailProc.BeginOutputReadLine();
+                tailProc.BeginErrorReadLine();
+
+                win.Closed += (_, _) =>
+                {
+                    try { if (!tailProc.HasExited) tailProc.Kill(); } catch { }
+                    tailProc.Dispose();
+                };
+
+                win.Show();
+                Log("WireGuard log opened (last 24h history + live tail).", LogLevel.Ok);
             }
+            catch (Exception ex) { Log("Failed to read WireGuard log: " + ex.Message, LogLevel.Warn); }
         }
 
         // ── Logging ────────────────────────────────────────────────────────────
@@ -826,7 +1102,6 @@ namespace WGClientWifiSwitcher
         private void TitleBar_MouseDown(object sender, MouseButtonEventArgs e)
         { if (e.LeftButton == MouseButtonState.Pressed) DragMove(); }
 
-        private void MinimizeBtn_Click(object sender, RoutedEventArgs e) => Hide();
         private void CloseBtn_Click(object sender, RoutedEventArgs e)    => Hide();
         private void Window_Closing(object sender, CancelEventArgs e)
         {

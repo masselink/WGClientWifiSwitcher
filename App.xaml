@@ -465,5 +465,30 @@
             </Setter>
         </Style>
 
+        <!-- ── Dark tooltip ─────────────────────────────────────────── -->
+        <Style TargetType="ToolTip">
+            <Setter Property="Background"   Value="{StaticResource Panel}"/>
+            <Setter Property="Foreground"   Value="{StaticResource Text}"/>
+            <Setter Property="BorderBrush"  Value="{StaticResource Border}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="FontFamily"   Value="Consolas"/>
+            <Setter Property="FontSize"     Value="11"/>
+            <Setter Property="Padding"      Value="8,5"/>
+            <Setter Property="HasDropShadow" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToolTip">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
     </Application.Resources>
 </Application>
