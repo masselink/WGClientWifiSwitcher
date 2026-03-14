@@ -1,34 +1,32 @@
 @echo off
-title WireGuard Client and WiFi Switcher — Build
+title WireGuard Client and WiFi Switcher by Harold Masselink
 setlocal
-
 echo.
-echo  ==========================================
-echo   WireGuard Client and WiFi Switcher — EXE Builder
-echo  ==========================================
+echo  ====================================
+echo   WireGuard Client and WiFi Switcher
+echo  ====================================
+echo        by Harold Masselink
+echo  ====================================
+echo         (Using Claude.ai)
+echo  ====================================
 echo.
-
 dotnet --version >nul 2>&1
 if errorlevel 1 (
     echo  ERROR: .NET SDK not found.
     echo  Install from: https://dotnet.microsoft.com/download
     pause & exit /b 1
 )
-
 for /f "tokens=*" %%v in ('dotnet --version') do set DOTNET_VER=%%v
 echo  .NET SDK: %DOTNET_VER%
 echo.
 echo  Building...
 echo.
-
 dotnet build WGClientWifiSwitcher.csproj -c Release -o dist
-
 if errorlevel 1 (
     echo.
     echo  BUILD FAILED. See output above.
     pause & exit /b 1
 )
-
 if exist "dist\WGClientWifiSwitcher.exe" (
     echo.
     echo  ==========================================
@@ -43,5 +41,4 @@ if exist "dist\WGClientWifiSwitcher.exe" (
     echo  ERROR: exe not found after build.
     pause & exit /b 1
 )
-
 pause
