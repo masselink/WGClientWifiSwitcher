@@ -61,7 +61,8 @@ A native Windows companion app for WireGuard that automatically connects and dis
 ## Build
 
 ### Prerequisites
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - Windows 10/11 x64
 
 ### Steps
@@ -72,17 +73,21 @@ Double-click `BUILD.bat`, or run in a terminal:
 dotnet build WGClientWifiSwitcher.csproj -c Release -o dist
 ```
 
-Output: `dist\WGClientWifiSwitcher.exe`
+Output: `dist\WGClientWifiSwitcher.exe` and `dist\lang\`
+
+---
+
+## Quick start
+
+1. Install [WireGuard for Windows](https://www.wireguard.com/install/) and import your tunnels
+2. Build or download the app
+3. Run `WGClientWifiSwitcher.exe` — it will auto-detect your WireGuard installation
+4. Click **＋ Add Rule** to map a WiFi SSID to a tunnel
+5. The app minimises to the system tray — the icon turns green when a tunnel is active
 
 ---
 
 ## Configuration
-
-Config is saved automatically to:
-
-```
-%APPDATA%\WGClientWifiSwitcher\config.json
-```
 
 ### WireGuard install directory
 
@@ -95,23 +100,43 @@ The app auto-detects the WireGuard install directory from the registry on first 
 
 ### Rules
 
-Each rule maps a **WiFi SSID** to a **WireGuard tunnel**. When the app detects a network change it scans rules top-to-bottom and applies the first match. Leave the tunnel field blank to disconnect all tunnels on that network.
+Each rule maps a **WiFi SSID** → **WireGuard tunnel**. Rules are evaluated top-to-bottom; the first match wins. Leave the tunnel field blank to disconnect all tunnels on that network.
 
 The tunnel dropdown is populated from the discovered config files. You can also type a name directly — it must match exactly as shown in the WireGuard app.
 
 ### Default action
 
-Applies when no rule matches the current SSID:
-
-| Setting | Behaviour |
+| Setting | What happens when no rule matches |
 |---|---|
-| Do nothing | Leave tunnels as-is |
-| Disconnect all | Stop all active tunnels |
-| Activate tunnel | Start a named fallback tunnel |
+| Do nothing | Tunnels stay as-is |
+| Disconnect all | All active tunnels are stopped |
+| Activate tunnel | A named fallback tunnel is started |
 
 ---
 
-## Auto-start at Login (optional)
+## Multi-language support
+
+Language files live in `lang\` next to the executable. The picker in the title bar lets you switch without restarting. The activity log re-renders in the new language live.
+
+**To add a language:**
+
+1. Copy `lang\en.json` to `lang\de.json` (or any ISO code)
+2. Set `"_code": "de"` and `"_language": "Deutsch"`
+3. Translate every value
+4. The new language appears in the picker automatically — no recompile
+
+```json
+{
+  "_language": "Deutsch",
+  "_code": "de",
+  "AppTitle": "WireGuard Client und WiFi Switcher v1.0",
+  "BtnAddRule": "\uFF0B  Regel hinzufügen"
+}
+```
+
+---
+
+## Auto-start at login (optional)
 
 Run once in an elevated PowerShell to register a scheduled task that launches the app at login with admin rights — no UAC prompt each time:
 
@@ -126,7 +151,7 @@ Register-ScheduledTask -TaskName "WGClientWifiSwitcher" `
 
 ---
 
-## Project Structure
+## Project structure
 
 ```
 WGClientWifiSwitcher/
@@ -138,6 +163,12 @@ WGClientWifiSwitcher/
 ├── MainWindow.xaml            ← Main UI layout
 ├── MainWindow.xaml.cs         ← All app logic
 └── Views/
-    ├── RuleDialog.xaml        ← Add / Edit rule dialog
+    ├── RuleDialog.xaml         ← Add / Edit rule dialog
     └── RuleDialog.xaml.cs
 ```
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE) for details.
