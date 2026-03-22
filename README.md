@@ -1,3 +1,5 @@
+# project will be renamed to MasselGUARD in the next version
+
 # WireGuard Client and WiFi Switcher
 
 **Version 1.1.2** — by [Harold Masselink](https://github.com/masselink/WGClientWifiSwitcher)
