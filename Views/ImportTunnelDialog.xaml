@@ -27,7 +27,7 @@
                                FontFamily="Consolas" FontSize="13" FontWeight="Bold"
                                Foreground="{StaticResource Accent}"
                                VerticalAlignment="Center" Margin="16,0"/>
-                    <Button Content="✕" Style="{StaticResource DangerBtn}"
+                    <Button Content="&#x2715;" Style="{StaticResource DangerBtn}"
                             HorizontalAlignment="Right" Padding="10,4" Margin="0,0,8,0"
                             BorderThickness="0" Background="Transparent"
                             Click="CloseBtn_Click"/>
@@ -37,16 +37,16 @@
             <!-- Import options -->
             <StackPanel Grid.Row="1" Margin="20,16,20,16">
 
-                <!-- From file -->
+                <!-- From file (.conf / .conf.dpapi) -->
                 <Button Content="{Binding [ImportFromFile], Source={x:Static local:Lang.Instance}}"
                         Style="{StaticResource FlatBtn}"
                         HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                         Padding="16,10" Margin="0,0,0,8"
                         Click="ImportFromFile_Click"/>
 
-                <!-- From WireGuard client -->
+                <!-- Link to WireGuard profile — visible in Companion + Mixed mode only -->
                 <Button x:Name="ImportFromWireGuardBtn"
-                        Content="{Binding [ImportFromWireGuard], Source={x:Static local:Lang.Instance}}"
+                        Content="{Binding [ImportLinkWireGuard], Source={x:Static local:Lang.Instance}}"
                         Style="{StaticResource FlatBtn}"
                         HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                         Padding="16,10" Margin="0,0,0,8"

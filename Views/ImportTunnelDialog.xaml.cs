@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,37 +20,66 @@ namespace MasselGUARD.Views
 
         private readonly HashSet<string> _alreadyImported;
 
-        public ImportTunnelDialog(HashSet<string>? alreadyImported = null)
+        public ImportTunnelDialog(HashSet<string>? alreadyImported = null,
+            AppMode mode = AppMode.Mixed)
         {
             InitializeComponent();
             _alreadyImported = alreadyImported ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            // Disable WireGuard import option if WireGuard is not installed
-            var wgInstalled = MainWindow.FindWireGuardExe() != null;
-            var wgBtn = FindName("ImportFromWireGuardBtn") as System.Windows.Controls.Button;
-            if (wgBtn != null)
+            // "Link to WireGuard profile" is only meaningful in Companion or Mixed mode
+            bool showWg = mode != AppMode.Standalone;
+            bool wgInstalled = MainWindow.FindWireGuardExe() != null;
+            if (ImportFromWireGuardBtn != null)
             {
-                wgBtn.IsEnabled = wgInstalled;
-                if (!wgInstalled)
-                    wgBtn.ToolTip = Lang.T("TunnelWireGuardNotInstalled");
+                ImportFromWireGuardBtn.Visibility = showWg
+                    ? System.Windows.Visibility.Visible
+                    : System.Windows.Visibility.Collapsed;
+                if (showWg && !wgInstalled)
+                {
+                    ImportFromWireGuardBtn.IsEnabled = false;
+                    ImportFromWireGuardBtn.ToolTip   = Lang.T("TunnelWireGuardNotInstalled");
+                }
             }
         }
 
-        // ── Import from .conf file ────────────────────────────────────────────
+        // ── Import from .conf or .conf.dpapi file ────────────────────────────
         private void ImportFromFile_Click(object sender, RoutedEventArgs e)
         {
             var dlg = new OpenFileDialog
             {
                 Title  = Lang.T("ImportTitle"),
-                Filter = Lang.T("ImportFileFilter")
+                Filter = "WireGuard config (*.conf)|*.conf|Encrypted config (*.conf.dpapi)|*.conf.dpapi|All files (*.*)|*.*",
+                FilterIndex = 1,
+                Multiselect = false
             };
             if (dlg.ShowDialog() != true) return;
 
             try
             {
-                var text = File.ReadAllText(dlg.FileName, System.Text.Encoding.UTF8);
-                var name = Path.GetFileNameWithoutExtension(dlg.FileName);
-                TunnelImported?.Invoke(name, text, "local", dlg.FileName);
+                string text;
+                string filePath = dlg.FileName;
+
+                if (filePath.EndsWith(".conf.dpapi", StringComparison.OrdinalIgnoreCase))
+                {
+                    // DPAPI-encrypted file — decrypt with current user's key
+                    var cipherBytes = File.ReadAllBytes(filePath);
+                    var plainBytes = System.Security.Cryptography.ProtectedData.Unprotect(
+                        cipherBytes, null,
+                        System.Security.Cryptography.DataProtectionScope.CurrentUser);
+                    text = System.Text.Encoding.UTF8.GetString(plainBytes);
+
+                    // Strip double extension to get tunnel name: "home.conf.dpapi" → "home"
+                    var name = Path.GetFileNameWithoutExtension(
+                        Path.GetFileNameWithoutExtension(filePath));
+                    TunnelImported?.Invoke(name, text, "local", null);
+                }
+                else
+                {
+                    // Plain .conf file
+                    text = File.ReadAllText(filePath, System.Text.Encoding.UTF8);
+                    var name = Path.GetFileNameWithoutExtension(filePath);
+                    TunnelImported?.Invoke(name, text, "local", null);
+                }
                 Close();
             }
             catch (Exception ex)

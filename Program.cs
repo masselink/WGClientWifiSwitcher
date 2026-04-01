@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 
@@ -12,29 +13,33 @@ namespace MasselGUARD
         [STAThread]
         public static int Main(string[] args)
         {
-            var exeDir = Path.GetDirectoryName(
-                Environment.ProcessPath?.TrimEnd('\\', '/') ??
-                AppContext.BaseDirectory.TrimEnd('\\', '/'))
-                ?? AppContext.BaseDirectory;
+            // Resolve exe dir via MainModule.FileName — same approach as working
+            // WireGuardClient. Environment.ProcessPath is unreliable in some
+            // self-contained publish configurations.
+            string exeDir;
+            try
+            {
+                exeDir = Path.GetDirectoryName(
+                    Process.GetCurrentProcess().MainModule?.FileName
+                    ?? AppContext.BaseDirectory)
+                    ?? AppContext.BaseDirectory;
+            }
+            catch { exeDir = AppContext.BaseDirectory; }
 
-            // Set DLL search path before anything loads
-            Directory.SetCurrentDirectory(exeDir);
+            // CRITICAL: set CWD and DLL search path BEFORE everything else.
+            // When the SCM launches this process as a service child
+            //   (MasselGUARD.exe /service "...")
+            // CWD is System32. tunnel.dll calls LoadLibrary("wireguard.dll")
+            // using CWD + DLL search order, so both must point at the exe dir.
+            try { Directory.SetCurrentDirectory(exeDir); } catch { }
             SetDllDirectory(exeDir);
 
-            // ── /service dispatch — must happen before WPF starts ────────────
-            // args here are from Environment.GetCommandLineArgs() minus the exe name,
-            // matching the reference implementation's HandleServiceArgs contract.
-            var cmdArgs = Environment.GetCommandLineArgs();
-            // cmdArgs[0] = exe, cmdArgs[1..] = actual args
-            string[] serviceArgs = cmdArgs.Length > 1
-                ? cmdArgs[1..]
-                : Array.Empty<string>();
-
-            int svcResult = TunnelDll.HandleServiceArgs(serviceArgs);
+            // /service dispatch — must happen before any WPF initialisation.
+            int svcResult = TunnelDll.HandleServiceArgs(args, exeDir);
             if (svcResult >= 0)
                 return svcResult;
 
-            // ── Normal GUI launch ────────────────────────────────────────────
+            // Normal GUI launch.
             var app = new App();
             app.InitializeComponent();
             app.Run();

@@ -20,8 +20,9 @@ namespace MasselGUARD
     /// </summary>
     public static class UpdateChecker
     {
-        private const string ApiUrl     = "https://api.github.com/repos/masselink/MasselGUARD/releases/latest";
-        private const string CurrentVersion = "2.0";   // keep in sync with AppTitle
+        private const string TagsApiUrl     = "https://api.github.com/repos/masselink/MasselGUARD/tags";
+        private const string ReleasesApiUrl = "https://api.github.com/repos/masselink/MasselGUARD/releases";
+        private const string CurrentVersion = "2.1";   // keep in sync with AppTitle
 
         // ── Public: silent background check (called on startup) ──────────────
         public static async Task CheckAsync(AppConfig cfg, Action saveConfig,
@@ -115,6 +116,7 @@ namespace MasselGUARD
         }
 
         // ── Helpers ───────────────────────────────────────────────────────────
+        // Returns true when the latest published tag is newer than the running build.
         public static bool IsNewerVersion(string? latestTag)
         {
             if (string.IsNullOrEmpty(latestTag)) return false;
@@ -123,37 +125,66 @@ namespace MasselGUARD
             return latest > current;
         }
 
+        // Returns true when the running build is AHEAD of the latest published tag.
+        public static bool IsAheadOfLatest(string? latestTag)
+        {
+            if (string.IsNullOrEmpty(latestTag)) return false;
+            var latest  = ParseVersion(latestTag.TrimStart('v', 'V'));
+            var current = ParseVersion(CurrentVersion);
+            return current > latest;
+        }
+
+        public static string CurrentVersionString => CurrentVersion;
+
         private static Version ParseVersion(string s)
         {
             if (Version.TryParse(s, out var v)) return v;
             return new Version(0, 0);
         }
 
+        // Fetch latest tag from GitHub tags API, then find its release asset.
         public static async Task<ReleaseInfo?> FetchLatestReleaseAsync()
         {
             using var http = MakeClient();
-            var json = await http.GetStringAsync(ApiUrl);
-            using var doc  = JsonDocument.Parse(json);
-            var root = doc.RootElement;
 
-            var tag = root.TryGetProperty("tag_name", out var t) ? t.GetString() : null;
-            if (tag == null) return null;
+            // Step 1: get the latest tag name from the tags list
+            var tagsJson = await http.GetStringAsync(TagsApiUrl);
+            using var tagsDoc = JsonDocument.Parse(tagsJson);
+            string? latestTag = null;
+            Version latestVer  = new Version(0, 0);
+            foreach (var tagEl in tagsDoc.RootElement.EnumerateArray())
+            {
+                var name = tagEl.TryGetProperty("name", out var n) ? n.GetString() : null;
+                if (name == null) continue;
+                var ver = ParseVersion(name.TrimStart('v', 'V'));
+                if (ver > latestVer) { latestVer = ver; latestTag = name; }
+            }
+            if (latestTag == null) return null;
 
+            // Step 2: find the GitHub release for this tag to get the asset URL
             string? zipUrl = null;
-            if (root.TryGetProperty("assets", out var assets))
-                foreach (var asset in assets.EnumerateArray())
-                {
-                    var name = asset.TryGetProperty("name", out var n) ? n.GetString() : null;
-                    if (string.Equals(name, "MasselGUARD.zip",
-                            StringComparison.OrdinalIgnoreCase))
+            try
+            {
+                var relJson = await http.GetStringAsync(
+                    ReleasesApiUrl + "/tags/" + latestTag);
+                using var relDoc = JsonDocument.Parse(relJson);
+                if (relDoc.RootElement.TryGetProperty("assets", out var assets))
+                    foreach (var asset in assets.EnumerateArray())
                     {
-                        zipUrl = asset.TryGetProperty("browser_download_url", out var u)
-                            ? u.GetString() : null;
-                        break;
+                        var aname = asset.TryGetProperty("name", out var an)
+                            ? an.GetString() : null;
+                        if (string.Equals(aname, "MasselGUARD.zip",
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            zipUrl = asset.TryGetProperty("browser_download_url", out var u)
+                                ? u.GetString() : null;
+                            break;
+                        }
                     }
-                }
+            }
+            catch { /* tag exists but has no release — that is fine */ }
 
-            return new ReleaseInfo(tag, zipUrl);
+            return new ReleaseInfo(latestTag, zipUrl);
         }
 
         private static HttpClient MakeClient()

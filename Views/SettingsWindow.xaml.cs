@@ -15,15 +15,12 @@ namespace MasselGUARD.Views
             InitializeComponent();
             _main = main;
 
-            // Populate log level picker
+            // ── Log level ────────────────────────────────────────────────────
             LogLevelPicker.Items.Add(Lang.T("LogLevelNormal"));
             LogLevelPicker.Items.Add(Lang.T("LogLevelDebug"));
             LogLevelPicker.SelectedIndex = _main.GetConfig().LogLevelSetting == "debug" ? 1 : 0;
 
-            // Initialise local tunnels toggle
-            LocalTunnelsToggle.IsChecked = _main.GetConfig().EnableLocalTunnels;
-
-            // Populate language picker
+            // ── Language ─────────────────────────────────────────────────────
             foreach (var (code, name) in Lang.AvailableLanguages())
                 LanguagePicker.Items.Add(new LangItem(code, name));
             LanguagePicker.DisplayMemberPath = "Name";
@@ -36,20 +33,29 @@ namespace MasselGUARD.Views
                 }
             }
 
-            Lang.Instance.LanguageChanged += OnLanguageChanged;
-            Closed += (_, _) => Lang.Instance.LanguageChanged -= OnLanguageChanged;
+            // ── App mode radio buttons ────────────────────────────────────────
+            ApplyModeToRadios(_main.GetConfig().Mode);
 
+            // ── Manual (automation) mode ──────────────────────────────────────
+            ManualModeToggle.IsChecked = _main.GetConfig().ManualMode;
+
+            // ── Install / DLL / WireGuard section ────────────────────────────
             RefreshInstallState();
             RefreshDllStatus();
             RefreshWireGuardSection();
             RefreshUpdateState();
 
-            // Initialise manual mode toggle without firing the handler
-            ManualModeToggle.IsChecked = _main.GetConfig().ManualMode;
+            // Suppress portable-update prompt toggle
+            SuppressUpdatePromptToggle.IsChecked = _main.GetConfig().SuppressPortableUpdatePrompt;
+
+            Lang.Instance.LanguageChanged += OnLanguageChanged;
+            Closed += (_, _) => Lang.Instance.LanguageChanged -= OnLanguageChanged;
+
             _loading = false;
             VersionLabel.Text = Lang.T("SettingsVersion") + " " + Lang.T("AppTitle");
         }
 
+        // ── Language change ───────────────────────────────────────────────────
         private void OnLanguageChanged(object? sender, EventArgs e)
         {
             Dispatcher.BeginInvoke(() =>
@@ -60,9 +66,34 @@ namespace MasselGUARD.Views
                 RefreshUpdateState();
                 VersionLabel.Text = Lang.T("SettingsVersion") + " " + Lang.T("AppTitle");
                 CheckUpdateBtn.Content = Lang.T("BtnCheckUpdate");
+                // Re-sync the suppress toggle in case language changed its label
+                SuppressUpdatePromptToggle.IsChecked =
+                    _main.GetConfig().SuppressPortableUpdatePrompt;
             });
         }
 
+        // ── Mode radios ───────────────────────────────────────────────────────
+        private void ApplyModeToRadios(AppMode mode)
+        {
+            ModeStandalone.IsChecked = mode == AppMode.Standalone;
+            ModeCompanion.IsChecked  = mode == AppMode.Companion;
+            ModeMixed.IsChecked      = mode == AppMode.Mixed;
+            RefreshDllStatus();
+            RefreshWireGuardSection();
+        }
+
+        private void Mode_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_loading) return;
+            AppMode mode = AppMode.Mixed;
+            if (ModeStandalone.IsChecked == true) mode = AppMode.Standalone;
+            else if (ModeCompanion.IsChecked == true) mode = AppMode.Companion;
+            _main.SetMode(mode);
+            RefreshDllStatus();
+            RefreshWireGuardSection();
+        }
+
+        // ── Manual (automation) mode ──────────────────────────────────────────
         private void ManualMode_Changed(object sender, RoutedEventArgs e)
         {
             if (_loading) return;
@@ -72,15 +103,7 @@ namespace MasselGUARD.Views
             _main.ApplyManualMode();
         }
 
-        private void LocalTunnels_Changed(object sender, RoutedEventArgs e)
-        {
-            if (_loading) return;
-            var cfg = _main.GetConfig();
-            cfg.EnableLocalTunnels = LocalTunnelsToggle.IsChecked == true;
-            _main.SaveConfigPublic();
-            _main.ApplyLocalTunnelModePublic();
-        }
-
+        // ── Log level ─────────────────────────────────────────────────────────
         private void LogLevel_Changed(object sender,
             System.Windows.Controls.SelectionChangedEventArgs e)
         {
@@ -90,6 +113,7 @@ namespace MasselGUARD.Views
             _main.SaveConfigPublic();
         }
 
+        // ── WireGuard client section ──────────────────────────────────────────
         private void OpenWireGuard_Click(object sender, RoutedEventArgs e) =>
             _main.OpenWireGuardGui();
 
@@ -99,12 +123,36 @@ namespace MasselGUARD.Views
         private void RefreshWireGuardSection()
         {
             bool wgInstalled = MainWindow.FindWireGuardExe() != null;
-            var vis = wgInstalled ? Visibility.Visible : Visibility.Collapsed;
+            bool showSection = wgInstalled && _main.GetConfig().Mode != AppMode.Standalone;
+            var vis = showSection ? Visibility.Visible : Visibility.Collapsed;
             WireGuardSectionLabel.Visibility = vis;
             WireGuardSectionCard.Visibility  = vis;
         }
 
-        // ── Install state ────────────────────────────────────────────────────
+        // ── DLL status ────────────────────────────────────────────────────────
+        private void RefreshDllStatus()
+        {
+            var mode = _main.GetConfig().Mode;
+            bool showDll = mode != AppMode.Companion;
+            DllStatusPanel.Visibility = showDll ? Visibility.Visible : Visibility.Collapsed;
+
+            if (!showDll) return;
+
+            // ValidateDlls() catches both missing DLLs and the wrong wireguard.dll version
+            var dllError = TunnelDll.ValidateDlls();
+            if (dllError == null)
+            {
+                DllStatusLabel.Text       = Lang.T("DllStatusPresent");
+                DllStatusLabel.Foreground = (System.Windows.Media.SolidColorBrush)FindResource("Green");
+            }
+            else
+            {
+                DllStatusLabel.Text       = dllError;
+                DllStatusLabel.Foreground = (System.Windows.Media.SolidColorBrush)FindResource("Red");
+            }
+        }
+
+        // ── Install state ─────────────────────────────────────────────────────
         public void RefreshInstallState()
         {
             if (_main.IsInstalledCheck())
@@ -113,28 +161,15 @@ namespace MasselGUARD.Views
                 InstallStatusLabel.Text     = Lang.T("AlreadyInstalled", path ?? "");
                 InstallPathLabel.Text       = path ?? "";
                 InstallPathLabel.Visibility = Visibility.Visible;
-
-                if (_main.IsRunningPortableWhileInstalled())
-                {
-                    // Portable copy running alongside install — offer to update
-                    InstallBtn.Content = Lang.T("BtnUpdate");
-                    InstallBtn.SetResourceReference(ForegroundProperty, "Green");
-                    InstallBtn.ToolTip = Lang.T("TooltipUpdate");
-                }
-                else
-                {
-                    InstallBtn.Content = Lang.T("BtnUninstall");
-                    InstallBtn.SetResourceReference(ForegroundProperty, "Red");
-                    InstallBtn.ToolTip = Lang.T("TooltipUninstall");
-                }
+                InstallBtn.Content          = _main.IsRunningPortableWhileInstalled()
+                    ? Lang.T("TooltipUpdate")
+                    : Lang.T("BtnUninstall");
             }
             else
             {
                 InstallStatusLabel.Text     = Lang.T("NotInstalled");
                 InstallPathLabel.Visibility = Visibility.Collapsed;
                 InstallBtn.Content          = Lang.T("BtnInstall");
-                InstallBtn.SetResourceReference(ForegroundProperty, "Accent");
-                InstallBtn.ToolTip          = Lang.T("TooltipInstall");
             }
         }
 
@@ -144,83 +179,61 @@ namespace MasselGUARD.Views
             RefreshInstallState();
         }
 
-        private void RefreshDllStatus() { /* DLLs no longer required for local tunnels */ }
+        // ── Language picker ───────────────────────────────────────────────────
+        private void LanguagePicker_SelectionChanged(object sender,
+            System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            if (_loading) return;
+            if (LanguagePicker.SelectedItem is LangItem item)
+            {
+                Lang.Instance.Load(item.Code);
+                AppConfig.SaveLanguage(item.Code);
+            }
+        }
 
-        // ── Update state ─────────────────────────────────────────────────────
+        // ── Update section ────────────────────────────────────────────────────
         private void RefreshUpdateState()
         {
             CheckUpdateBtn.Content = Lang.T("BtnCheckUpdate");
             var cfg = _main.GetConfig();
+            string current = UpdateChecker.CurrentVersionString;
+            string? latest = cfg.LatestKnownVersion;
 
-            // Last checked label
+            if (latest != null && UpdateChecker.IsAheadOfLatest(latest))
+                UpdateStatusLabel.Text = Lang.T("SettingsUpdateAhead", current, latest);
+            else if (latest != null && UpdateChecker.IsNewerVersion(latest))
+                UpdateStatusLabel.Text = Lang.T("SettingsUpdateAvailable", latest);
+            else
+                UpdateStatusLabel.Text = Lang.T("SettingsUpdateCurrent", current);
+
             LastCheckedLabel.Text = cfg.LastUpdateCheck == DateTime.MinValue
                 ? Lang.T("SettingsUpdateLastChecked", Lang.T("SettingsUpdateNever"))
                 : Lang.T("SettingsUpdateLastChecked",
-                    cfg.LastUpdateCheck.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
+                    cfg.LastUpdateCheck.ToLocalTime().ToString("g"));
 
-            // Status label
-            if (!string.IsNullOrEmpty(cfg.LatestKnownVersion) &&
-                UpdateChecker.IsNewerVersion(cfg.LatestKnownVersion))
-            {
-                UpdateStatusLabel.Text = Lang.T("SettingsUpdateAvailable", cfg.LatestKnownVersion);
-                UpdateStatusLabel.SetResourceReference(ForegroundProperty, "Green");
-            }
-            else if (!string.IsNullOrEmpty(cfg.LatestKnownVersion))
-            {
-                UpdateStatusLabel.Text = Lang.T("SettingsUpdateCurrent", cfg.LatestKnownVersion);
-                UpdateStatusLabel.SetResourceReference(ForegroundProperty, "Sub");
-                DoUpdateBtn.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                UpdateStatusLabel.Text = Lang.T("SettingsUpdateLastChecked",
-                    Lang.T("SettingsUpdateNever"));
-                UpdateStatusLabel.SetResourceReference(ForegroundProperty, "Sub");
-            }
-
-            // Show update button if newer version known
-            if (_pendingRelease != null && UpdateChecker.IsNewerVersion(_pendingRelease.TagName))
-            {
-                DoUpdateBtn.Content    = Lang.T("BtnUpdate", _pendingRelease.TagName);
-                DoUpdateBtn.Visibility = Visibility.Visible;
-            }
+            // Show update button only when the published version is actually newer
+            bool hasUpdate = _pendingRelease != null
+                && UpdateChecker.IsNewerVersion(_pendingRelease.TagName);
+            DoUpdateBtn.Visibility = hasUpdate ? Visibility.Visible : Visibility.Collapsed;
+            if (hasUpdate)
+                DoUpdateBtn.Content = Lang.T("BtnUpdate", _pendingRelease!.TagName);
         }
 
         private async void CheckUpdate_Click(object sender, RoutedEventArgs e)
         {
             CheckUpdateBtn.IsEnabled = false;
             UpdateStatusLabel.Text   = Lang.T("SettingsUpdateChecking");
-            UpdateStatusLabel.SetResourceReference(ForegroundProperty, "Sub");
             DoUpdateBtn.Visibility   = Visibility.Collapsed;
 
             try
             {
                 _pendingRelease = await UpdateChecker.CheckNowAsync(
                     _main.GetConfig(), _main.SaveConfigPublic);
-
-                LastCheckedLabel.Text = Lang.T("SettingsUpdateLastChecked",
-                    DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
-
-                if (_pendingRelease != null &&
-                    UpdateChecker.IsNewerVersion(_pendingRelease.TagName))
-                {
-                    UpdateStatusLabel.Text = Lang.T("SettingsUpdateAvailable",
-                        _pendingRelease.TagName);
-                    UpdateStatusLabel.SetResourceReference(ForegroundProperty, "Green");
-                    DoUpdateBtn.Content    = Lang.T("BtnUpdate", _pendingRelease.TagName);
-                    DoUpdateBtn.Visibility = Visibility.Visible;
-                }
-                else
-                {
-                    UpdateStatusLabel.Text = Lang.T("SettingsUpdateCurrent",
-                        _pendingRelease?.TagName ?? "?");
-                    UpdateStatusLabel.SetResourceReference(ForegroundProperty, "Sub");
-                }
+                RefreshUpdateState();
             }
             catch (Exception ex)
             {
                 UpdateStatusLabel.Text = Lang.T("UpdateCheckFailed", ex.Message);
-                UpdateStatusLabel.SetResourceReference(ForegroundProperty, "Red");
             }
             finally
             {
@@ -234,37 +247,41 @@ namespace MasselGUARD.Views
             DoUpdateBtn.IsEnabled    = false;
             CheckUpdateBtn.IsEnabled = false;
 
-            var progress = new Progress<string>(msg =>
-                Dispatcher.BeginInvoke(() => UpdateStatusLabel.Text = msg));
-
             try
             {
-                await UpdateChecker.UpdateAsync(_pendingRelease, progress,
+                var progress = new Progress<string>(msg =>
+                    UpdateStatusLabel.Text = msg);
+                await UpdateChecker.UpdateAsync(
+                    _pendingRelease,
+                    progress,
                     _main.GetConfig(), _main.SaveConfigPublic);
-                // App will exit after this — UpdateAsync calls ShutdownApp
             }
             catch (Exception ex)
             {
                 UpdateStatusLabel.Text = Lang.T("UpdateFailed", ex.Message);
-                UpdateStatusLabel.SetResourceReference(ForegroundProperty, "Red");
+            }
+            finally
+            {
                 DoUpdateBtn.IsEnabled    = true;
                 CheckUpdateBtn.IsEnabled = true;
             }
         }
 
-        // ── Language picker ──────────────────────────────────────────────────
-        private void LanguagePicker_SelectionChanged(object sender,
-            System.Windows.Controls.SelectionChangedEventArgs e)
+        // ── Suppress update prompt ────────────────────────────────────────────
+        private void SuppressUpdatePrompt_Changed(object sender, RoutedEventArgs e)
         {
-            if (LanguagePicker.SelectedItem is LangItem item)
-                Lang.Instance.Load(item.Code);
+            if (_loading) return;
+            var cfg = _main.GetConfig();
+            cfg.SuppressPortableUpdatePrompt = SuppressUpdatePromptToggle.IsChecked == true;
+            _main.SaveConfigPublic();
         }
 
-        private void CloseBtn_Click(object sender, RoutedEventArgs e) => Close();
-
+        // ── Window chrome ─────────────────────────────────────────────────────
         private void TitleBar_MouseDown(object sender, MouseButtonEventArgs e)
         {
             if (e.LeftButton == MouseButtonState.Pressed) DragMove();
         }
+
+        private void CloseBtn_Click(object sender, RoutedEventArgs e) => Close();
     }
 }

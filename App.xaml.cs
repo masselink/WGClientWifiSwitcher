@@ -205,6 +205,9 @@ namespace MasselGUARD
 
         protected override void OnExit(ExitEventArgs e)
         {
+            // Stop all active local tunnel services before the process exits.
+            // This prevents orphaned WireGuardTunnel$ services remaining in the SCM.
+            try { TunnelDll.DisconnectAll(); } catch { }
             _trayIcon?.Dispose();
             try { _instanceMutex?.ReleaseMutex(); } catch { }
             _instanceMutex?.Dispose();

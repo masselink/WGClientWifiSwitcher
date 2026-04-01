@@ -98,6 +98,33 @@
                                FontSize="11" FontWeight="Bold" Margin="6,0,0,0"
                                Foreground="{StaticResource Green}" VerticalAlignment="Center"/>
 
+                    <!-- Action buttons — right-aligned in column 6 -->
+                    <StackPanel Grid.Column="6" Orientation="Horizontal"
+                                HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Margin="0,0,4,0">
+                        <!-- Quick Connect: Standalone + Mixed mode only -->
+                        <Button x:Name="QuickConnectBtn"
+                                Content="{Binding [BtnQuickConnect], Source={x:Static local:Lang.Instance}}"
+                                Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
+                                Visibility="Collapsed"
+                                ToolTip="{Binding [TooltipQuickConnect], Source={x:Static local:Lang.Instance}}"
+                                Click="QuickConnect_Click"/>
+                        <!-- Open WireGuard GUI: Companion + Mixed only -->
+                        <Button x:Name="OpenWgBtn"
+                                Content="{Binding [BtnOpenWireGuard], Source={x:Static local:Lang.Instance}}"
+                                Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
+                                Margin="6,0,0,0" Visibility="Collapsed"
+                                ToolTip="{Binding [TooltipWireGuard], Source={x:Static local:Lang.Instance}}"
+                                Click="OpenWireGuardGui_Click"/>
+                        <!-- WireGuard Log: Companion + Mixed AND a WireGuard tunnel is active -->
+                        <Button x:Name="WireGuardLogBtn"
+                                Content="{Binding [BtnShowLog], Source={x:Static local:Lang.Instance}}"
+                                Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
+                                Margin="6,0,0,0" Visibility="Collapsed"
+                                ToolTip="{Binding [TooltipLog], Source={x:Static local:Lang.Instance}}"
+                                Click="ShowWireGuardLog_Click"/>
+                    </StackPanel>
+
                 </Grid>
             </Border>
 
@@ -230,9 +257,10 @@
                                 Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
                                 Margin="6,0,0,0"
                                 Click="ImportTunnel_Click"/>
-                        <Button Content="{Binding [BtnDeleteTunnel], Source={x:Static local:Lang.Instance}}"
+                        <!-- Morphing action button: Delete / Unlink / Remove depending on selection -->
+                        <Button x:Name="DeleteTunnelBtn"
                                 Style="{StaticResource DangerBtn}" FontSize="10" Padding="10,3"
-                                Margin="6,0,0,0" x:Name="DeleteTunnelBtn" IsEnabled="False"
+                                Margin="6,0,0,0" IsEnabled="False"
                                 Click="DeleteTunnel_Click"/>
                     </StackPanel>
 
