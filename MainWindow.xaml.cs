@@ -641,7 +641,7 @@ namespace MasselGUARD
 
                 // Background update check — once every 7 days
                 if ((DateTime.UtcNow - _cfg.LastUpdateCheck).TotalDays >= 7)
-                    _ = UpdateChecker.CheckAsync(_cfg, SaveConfig, Dispatcher);
+                    _ = UpdateChecker.CheckAsync(_cfg, () => SaveConfig(), Dispatcher);
 
                 // First run: show setup wizard if no config file existed before LoadConfig()
                 if (_firstRun)
@@ -1025,7 +1025,93 @@ namespace MasselGUARD
                     : Lang.T("TrayPopupConnecting", target));
         }
 
-        // ── WireGuard helpers ────────────────────────────────────────────────
+        // ── Script execution ──────────────────────────────────────────────────
+        private const string ScriptEmbedPrefix = "@embed:";
+
+        /// <summary>
+        /// Runs a script hook. Value can be:
+        ///   - Empty/null   → nothing
+        ///   - "@embed:..." → inline content, written to a temp file and executed
+        ///   - "*.ps1"      → powershell.exe -ExecutionPolicy Bypass -File &lt;path&gt;
+        ///   - "*.bat"      → cmd.exe /c &lt;path&gt;
+        /// Returns true if no script configured OR if the script exits 0.
+        /// </summary>
+        private bool RunTunnelScript(string? value, string hook, string tunnelName)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return true;
+
+            string scriptPath;
+            bool   isTempFile = false;
+
+            if (value.StartsWith(ScriptEmbedPrefix, StringComparison.Ordinal))
+            {
+                // Inline/embedded script — write to temp file
+                var content = value[ScriptEmbedPrefix.Length..];
+                var ext     = content.TrimStart().StartsWith("#!", StringComparison.Ordinal) ? ".sh"
+                            : content.Contains("powershell", StringComparison.OrdinalIgnoreCase) ? ".ps1"
+                            : ".bat";
+                scriptPath  = Path.Combine(Path.GetTempPath(), $"masselguard_{hook}_{tunnelName}{ext}");
+                File.WriteAllText(scriptPath, content, System.Text.Encoding.UTF8);
+                isTempFile = true;
+                LogRaw($"  [Script] Running embedded {hook} script for {tunnelName}", LogLevel.Info);
+            }
+            else
+            {
+                scriptPath = value;
+                if (!File.Exists(scriptPath))
+                {
+                    LogRaw($"  [Script] {hook} script not found: {scriptPath}", LogLevel.Warn);
+                    return false;
+                }
+                LogRaw($"  [Script] Running {hook}: {Path.GetFileName(scriptPath)}", LogLevel.Info);
+            }
+
+            try
+            {
+                var ext = Path.GetExtension(scriptPath).ToLowerInvariant();
+                string exe, args;
+                if (ext == ".ps1")
+                {
+                    exe  = "powershell.exe";
+                    args = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{scriptPath}\"";
+                }
+                else
+                {
+                    exe  = "cmd.exe";
+                    args = $"/c \"{scriptPath}\"";
+                }
+
+                var psi = new ProcessStartInfo(exe, args)
+                {
+                    UseShellExecute        = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError  = true,
+                    CreateNoWindow         = true,
+                };
+                using var proc = Process.Start(psi)!;
+                string stdout = proc.StandardOutput.ReadToEnd().Trim();
+                string stderr = proc.StandardError.ReadToEnd().Trim();
+                proc.WaitForExit(30_000);
+
+                if (!string.IsNullOrEmpty(stdout))
+                    LogRaw($"  [Script] {stdout}", LogLevel.Debug);
+                if (!string.IsNullOrEmpty(stderr))
+                    LogRaw($"  [Script] stderr: {stderr}", LogLevel.Warn);
+
+                bool ok = proc.ExitCode == 0;
+                LogRaw($"  [Script] {hook} exit {proc.ExitCode}{(ok ? "" : " (non-zero)")}", ok ? LogLevel.Info : LogLevel.Warn);
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                LogRaw($"  [Script] {hook} error: {ex.Message}", LogLevel.Warn);
+                return false;
+            }
+            finally
+            {
+                if (isTempFile) try { File.Delete(scriptPath); } catch { }
+            }
+        }
 
         private static string SvcName(string t) => "WireGuardTunnel$" + t;
 
@@ -1098,6 +1184,10 @@ namespace MasselGUARD
             var stored = _cfg.Tunnels.FirstOrDefault(t =>
                 string.Equals(t.Name, tunnel, StringComparison.OrdinalIgnoreCase));
 
+            // ── Pre-connect script (runs for all tunnel types) ────────────────
+            if (!string.IsNullOrEmpty(stored?.PreConnectScript))
+                RunTunnelScript(stored.PreConnectScript, "pre-connect", tunnel);
+
             // ── Local tunnel — tunnel.dll + wireguard.dll ─────────────────────
             if (stored?.Source == "local")
             {
@@ -1159,8 +1249,13 @@ namespace MasselGUARD
                 // no longer needs the file on disk.
                 try { File.Delete(svcConf); } catch { }
 
-                if (!ok) LastError = err;
-                return ok;
+                if (!ok) { LastError = err; return false; }
+
+                // ── Post-connect script ───────────────────────────────────────
+                if (!string.IsNullOrEmpty(stored?.PostConnectScript))
+                    RunTunnelScript(stored.PostConnectScript, "post-connect", tunnel);
+
+                return true;
             }
 
             // ── WireGuard GUI tunnel ──────────────────────────────────────────
@@ -1174,6 +1269,8 @@ namespace MasselGUARD
                 if (svc.Status == ServiceControllerStatus.Running) return true;
                 svc.Start();
                 svc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
+                if (!string.IsNullOrEmpty(stored?.PostConnectScript))
+                    RunTunnelScript(stored.PostConnectScript, "post-connect", tunnel);
                 return true;
             }
             catch (Exception ex1)
@@ -1205,6 +1302,10 @@ namespace MasselGUARD
             var stored = _cfg.Tunnels.FirstOrDefault(t =>
                 string.Equals(t.Name, tunnel, StringComparison.OrdinalIgnoreCase));
 
+            // ── Pre-disconnect script (all tunnel types) ──────────────────────
+            if (!string.IsNullOrEmpty(stored?.PreDisconnectScript))
+                RunTunnelScript(stored.PreDisconnectScript, "pre-disconnect", tunnel);
+
             // ── Local tunnel ──────────────────────────────────────────────────
             if (stored?.Source == "local")
             {
@@ -1215,6 +1316,14 @@ namespace MasselGUARD
                 if (!string.IsNullOrEmpty(err)) LastError = err;
                 try { var f = SvcConfPath(tunnel); if (File.Exists(f)) File.Delete(f); } catch { }
                 LogRaw($"  [DBG] Disconnected in {sw.ElapsedMilliseconds} ms", LogLevel.Debug);
+<<<<<<< Updated upstream
+=======
+
+                // ── Post-disconnect script ────────────────────────────────────
+                if (!string.IsNullOrEmpty(stored?.PostDisconnectScript))
+                    RunTunnelScript(stored.PostDisconnectScript, "post-disconnect", tunnel);
+
+>>>>>>> Stashed changes
                 return true;
             }
 
@@ -1229,6 +1338,14 @@ namespace MasselGUARD
                 svc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15));
                 sw.Stop();
                 LogRaw($"  [DBG] Service stopped in {sw.ElapsedMilliseconds} ms", LogLevel.Debug);
+<<<<<<< Updated upstream
+=======
+
+                // ── Post-disconnect script ────────────────────────────────────
+                if (!string.IsNullOrEmpty(stored?.PostDisconnectScript))
+                    RunTunnelScript(stored.PostDisconnectScript, "post-disconnect", tunnel);
+
+>>>>>>> Stashed changes
                 return true;
             }
             catch (Exception ex)
@@ -1751,7 +1868,13 @@ namespace MasselGUARD
         // ── Tunnel CRUD ───────────────────────────────────────────────────────
 
         private void SaveTunnelConfig(string name, string config,
+<<<<<<< Updated upstream
             string source = "local", string? filePath = null, string group = "")
+=======
+            string source = "local", string? filePath = null, string group = "",
+            string preConnect = "", string postConnect = "",
+            string preDisconnect = "", string postDisconnect = "")
+>>>>>>> Stashed changes
         {
             if (source == "local")
             {
@@ -1778,11 +1901,26 @@ namespace MasselGUARD
                 existing.Source  = source;
                 existing.Path    = filePath;
                 existing.Group   = group;
+<<<<<<< Updated upstream
+=======
+                existing.PreConnectScript     = preConnect;
+                existing.PostConnectScript    = postConnect;
+                existing.PreDisconnectScript  = preDisconnect;
+                existing.PostDisconnectScript = postDisconnect;
+>>>>>>> Stashed changes
             }
             else
             {
                 _cfg.Tunnels.Add(new StoredTunnel
+<<<<<<< Updated upstream
                     { Name = name, Config = config, Source = source, Path = filePath, Group = group });
+=======
+                {
+                    Name = name, Config = config, Source = source, Path = filePath, Group = group,
+                    PreConnectScript = preConnect, PostConnectScript = postConnect,
+                    PreDisconnectScript = preDisconnect, PostDisconnectScript = postDisconnect,
+                });
+>>>>>>> Stashed changes
             }
             SaveConfig($"Tunnel saved: {name}");
         }
@@ -1872,7 +2010,13 @@ namespace MasselGUARD
         {
             var dlg = new Views.TunnelConfigDialog { Owner = this };
             if (dlg.ShowDialog() != true) return;
+<<<<<<< Updated upstream
             SaveTunnelConfig(dlg.ResultName!, dlg.ResultConfig!, group: dlg.ResultGroup);
+=======
+            SaveTunnelConfig(dlg.ResultName!, dlg.ResultConfig!, group: dlg.ResultGroup,
+                preConnect: dlg.ResultPreConnectScript, postConnect: dlg.ResultPostConnectScript,
+                preDisconnect: dlg.ResultPreDisconnectScript, postDisconnect: dlg.ResultPostDisconnectScript);
+>>>>>>> Stashed changes
             Log("TunnelSavedLog", LogLevel.Ok, dlg.ResultName!);
             RefreshTunnelDropdowns();
         }
@@ -1892,20 +2036,40 @@ namespace MasselGUARD
                     entry.Name,
                     stored?.Group ?? "",
                     stored?.Notes ?? "",
+<<<<<<< Updated upstream
                     _cfg.TunnelGroups.Select(g => g.Name).ToList())
+=======
+                    _cfg.TunnelGroups.Select(g => g.Name).ToList(),
+                    stored?.PreConnectScript    ?? "",
+                    stored?.PostConnectScript   ?? "",
+                    stored?.PreDisconnectScript ?? "",
+                    stored?.PostDisconnectScript ?? "")
+>>>>>>> Stashed changes
                 { Owner = this };
 
                 if (mdlg.ShowDialog() != true) return;
 
+<<<<<<< Updated upstream
                 // Ensure a StoredTunnel record exists for this WG tunnel
+=======
+>>>>>>> Stashed changes
                 if (stored == null)
                 {
                     stored = new StoredTunnel
                         { Name = entry.Name, Source = "wireguard", Path = entry.Name };
                     _cfg.Tunnels.Add(stored);
                 }
+<<<<<<< Updated upstream
                 stored.Group = mdlg.ResultGroup;
                 stored.Notes = mdlg.ResultNotes;
+=======
+                stored.Group                = mdlg.ResultGroup;
+                stored.Notes                = mdlg.ResultNotes;
+                stored.PreConnectScript     = mdlg.ResultPreConnectScript;
+                stored.PostConnectScript    = mdlg.ResultPostConnectScript;
+                stored.PreDisconnectScript  = mdlg.ResultPreDisconnectScript;
+                stored.PostDisconnectScript = mdlg.ResultPostDisconnectScript;
+>>>>>>> Stashed changes
                 SaveConfig($"Tunnel metadata updated: {entry.Name}");
                 Log("TunnelSavedLog", LogLevel.Ok, entry.Name);
                 RefreshTunnelDropdowns();
@@ -1913,15 +2077,33 @@ namespace MasselGUARD
             }
 
             // Local tunnel — full editor
+<<<<<<< Updated upstream
             var config       = LoadTunnelConfig(entry.Name);
             var existingGroup = stored?.Group ?? "";
             var dlg = new Views.TunnelConfigDialog(entry.Name, config, existingGroup) { Owner = this };
+=======
+            var config        = LoadTunnelConfig(entry.Name);
+            var existingGroup = stored?.Group ?? "";
+            var dlg = new Views.TunnelConfigDialog(
+                entry.Name, config, existingGroup,
+                stored?.PreConnectScript    ?? "",
+                stored?.PostConnectScript   ?? "",
+                stored?.PreDisconnectScript ?? "",
+                stored?.PostDisconnectScript ?? "")
+            { Owner = this };
+>>>>>>> Stashed changes
             if (dlg.ShowDialog() != true) return;
 
             if (!string.Equals(dlg.ResultName, entry.Name, StringComparison.OrdinalIgnoreCase))
                 DeleteTunnelConfig(entry.Name);
 
+<<<<<<< Updated upstream
             SaveTunnelConfig(dlg.ResultName!, dlg.ResultConfig!, group: dlg.ResultGroup);
+=======
+            SaveTunnelConfig(dlg.ResultName!, dlg.ResultConfig!, group: dlg.ResultGroup,
+                preConnect: dlg.ResultPreConnectScript, postConnect: dlg.ResultPostConnectScript,
+                preDisconnect: dlg.ResultPreDisconnectScript, postDisconnect: dlg.ResultPostDisconnectScript);
+>>>>>>> Stashed changes
             Log("TunnelSavedLog", LogLevel.Ok, dlg.ResultName!);
             RefreshTunnelDropdowns();
         }

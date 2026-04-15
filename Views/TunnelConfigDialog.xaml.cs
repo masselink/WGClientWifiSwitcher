@@ -10,14 +10,30 @@ namespace MasselGUARD.Views
 {
     public partial class TunnelConfigDialog : Window
     {
+<<<<<<< Updated upstream
         public string? ResultName   { get; private set; }
         public string? ResultConfig { get; private set; }
         public string  ResultGroup  { get; private set; } = "";
+=======
+        public string? ResultName              { get; private set; }
+        public string? ResultConfig            { get; private set; }
+        public string  ResultGroup             { get; private set; } = "";
+        public string  ResultPreConnectScript  { get; private set; } = "";
+        public string  ResultPostConnectScript { get; private set; } = "";
+        public string  ResultPreDisconnectScript  { get; private set; } = "";
+        public string  ResultPostDisconnectScript { get; private set; } = "";
+>>>>>>> Stashed changes
 
         private readonly string? _originalName;
 
         public TunnelConfigDialog(string? existingName = null, string? existingConfig = null,
+<<<<<<< Updated upstream
                                   string? existingGroup = null)
+=======
+                                  string? existingGroup = null,
+                                  string? preConnect = null, string? postConnect = null,
+                                  string? preDisconnect = null, string? postDisconnect = null)
+>>>>>>> Stashed changes
         {
             InitializeComponent();
             _originalName = existingName;
@@ -41,11 +57,24 @@ namespace MasselGUARD.Views
 
             // Populate group picker from AppConfig
             GroupPicker.Items.Clear();
+<<<<<<< Updated upstream
             GroupPicker.Items.Add("");  // (none)
+=======
+            GroupPicker.Items.Add("");
+>>>>>>> Stashed changes
             var groups = MainWindow.GetConfigStatic()?.TunnelGroups;
             if (groups != null)
                 foreach (var g in groups) GroupPicker.Items.Add(g.Name);
             GroupPicker.SelectedItem = existingGroup ?? "";
+<<<<<<< Updated upstream
+=======
+
+            // Load script fields
+            LoadScript(PreConnectBox,     PreConnectEmbedBox,     PreConnectEmbed,     preConnect);
+            LoadScript(PostConnectBox,    PostConnectEmbedBox,    PostConnectEmbed,    postConnect);
+            LoadScript(PreDisconnectBox,  PreDisconnectEmbedBox,  PreDisconnectEmbed,  preDisconnect);
+            LoadScript(PostDisconnectBox, PostDisconnectEmbedBox, PostDisconnectEmbed, postDisconnect);
+>>>>>>> Stashed changes
         }
 
         // ── Load config into form fields ─────────────────────────────────────
@@ -171,10 +200,109 @@ namespace MasselGUARD.Views
             ResultName   = name;
             ResultConfig = TabRaw.IsSelected ? RawBox.Text : BuildConfigFromFields();
             ResultGroup  = GroupPicker.SelectedItem as string ?? "";
+<<<<<<< Updated upstream
+=======
+            ResultPreConnectScript     = CaptureScript(PreConnectBox,     PreConnectEmbedBox,     PreConnectEmbed);
+            ResultPostConnectScript    = CaptureScript(PostConnectBox,    PostConnectEmbedBox,    PostConnectEmbed);
+            ResultPreDisconnectScript  = CaptureScript(PreDisconnectBox,  PreDisconnectEmbedBox,  PreDisconnectEmbed);
+            ResultPostDisconnectScript = CaptureScript(PostDisconnectBox, PostDisconnectEmbedBox, PostDisconnectEmbed);
+>>>>>>> Stashed changes
             DialogResult = true;
         }
 
         private void CancelBtn_Click(object sender, RoutedEventArgs e) => DialogResult = false;
+
+        // ── Script helpers ────────────────────────────────────────────────────
+        private const string EmbedPrefix = "@embed:";
+
+        private static void LoadScript(
+            System.Windows.Controls.TextBox pathBox,
+            System.Windows.Controls.TextBox embedBox,
+            System.Windows.Controls.Primitives.ToggleButton embedToggle,
+            string? value)
+        {
+            if (string.IsNullOrEmpty(value)) return;
+            if (value.StartsWith(EmbedPrefix, StringComparison.Ordinal))
+            {
+                embedToggle.IsChecked = true;
+                embedBox.Text         = value[EmbedPrefix.Length..];
+                embedBox.Visibility   = Visibility.Visible;
+            }
+            else
+            {
+                pathBox.Text = value;
+            }
+        }
+
+        private static string CaptureScript(
+            System.Windows.Controls.TextBox pathBox,
+            System.Windows.Controls.TextBox embedBox,
+            System.Windows.Controls.Primitives.ToggleButton embedToggle)
+        {
+            if (embedToggle.IsChecked == true)
+            {
+                var content = embedBox.Text.Trim();
+                return string.IsNullOrEmpty(content) ? "" : EmbedPrefix + content;
+            }
+            return pathBox.Text.Trim();
+        }
+
+        private void EmbedToggle_Changed(object sender, RoutedEventArgs e)
+        {
+            if (sender is not System.Windows.Controls.Primitives.ToggleButton tb) return;
+            bool embed = tb.IsChecked == true;
+            string tag = tb.Tag as string ?? "";
+
+            var embedBox = tag switch
+            {
+                "PreConnect"     => PreConnectEmbedBox,
+                "PostConnect"    => PostConnectEmbedBox,
+                "PreDisconnect"  => PreDisconnectEmbedBox,
+                "PostDisconnect" => PostDisconnectEmbedBox,
+                _ => (System.Windows.Controls.TextBox?)null
+            };
+            var pathBox = tag switch
+            {
+                "PreConnect"     => PreConnectBox,
+                "PostConnect"    => PostConnectBox,
+                "PreDisconnect"  => PreDisconnectBox,
+                "PostDisconnect" => PostDisconnectBox,
+                _ => (System.Windows.Controls.TextBox?)null
+            };
+            if (embedBox == null) return;
+
+            if (embed)
+            {
+                if (!string.IsNullOrEmpty(pathBox?.Text) && File.Exists(pathBox.Text))
+                {
+                    try { embedBox.Text = File.ReadAllText(pathBox.Text, System.Text.Encoding.UTF8); }
+                    catch { }
+                }
+                embedBox.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                embedBox.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private void BrowseScript(System.Windows.Controls.TextBox pathBox)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title  = Lang.T("TunnelScriptBrowseTitle"),
+                Filter = "Scripts (*.bat;*.ps1)|*.bat;*.ps1|Batch files (*.bat)|*.bat|PowerShell (*.ps1)|*.ps1|All files (*.*)|*.*",
+            };
+            if (!string.IsNullOrEmpty(pathBox.Text) && File.Exists(pathBox.Text))
+                dlg.InitialDirectory = Path.GetDirectoryName(pathBox.Text);
+            if (dlg.ShowDialog() == true)
+                pathBox.Text = dlg.FileName;
+        }
+
+        private void BrowsePreConnect_Click(object sender, RoutedEventArgs e)     => BrowseScript(PreConnectBox);
+        private void BrowsePostConnect_Click(object sender, RoutedEventArgs e)    => BrowseScript(PostConnectBox);
+        private void BrowsePreDisconnect_Click(object sender, RoutedEventArgs e)  => BrowseScript(PreDisconnectBox);
+        private void BrowsePostDisconnect_Click(object sender, RoutedEventArgs e) => BrowseScript(PostDisconnectBox);
 
         private void TitleBar_MouseDown(object sender, MouseButtonEventArgs e)
         {

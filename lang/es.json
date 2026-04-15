@@ -153,7 +153,7 @@
   "InstallLocationDefault": "Default location:",
   "InstallLocationNote": "The subfolder 'WG Client and WiFi Switcher' will be created inside the selected folder.",
   "InstallLocationCurrent": "Install into:",
-  "BtnBrowse": "Browse…",
+  "BtnBrowse": "Examinar…",
   "BtnInstallHere": "Install here",
   "BtnSettings": "⚙",
   "TooltipSettings": "Settings",
@@ -257,6 +257,18 @@
   "TunnelDialogNotes": "Notas",
   "TunnelDialogNotesHint": "Opcional. Se muestra como tooltip en el nombre del túnel.",
   "TunnelDialogGroup": "Grupo",
+<<<<<<< Updated upstream
+=======
+  "TunnelDialogTabScripts": "Scripts",
+  "TunnelScriptsHeader": "Scripts",
+  "TunnelScriptsInfo": "Ejecute un archivo .bat o .ps1 (o incruste un script) antes o después de conectar/desconectar un túnel.",
+  "TunnelScriptPreConnect": "Antes de conectar",
+  "TunnelScriptPostConnect": "Después de conectar",
+  "TunnelScriptPreDisconnect": "Antes de desconectar",
+  "TunnelScriptPostDisconnect": "Después de desconectar",
+  "TunnelScriptBrowseTitle": "Seleccionar archivo de script",
+  "BtnEmbed": "Incrustar",
+>>>>>>> Stashed changes
   "SettingsSectionGroups": "GRUPOS DE TÚNELES",
   "SettingsGroupsDesc": "Organiza los túneles en secciones desplegables. Usa ↑↓ para reordenar.",
   "BtnAddGroup": "＋ Añadir",

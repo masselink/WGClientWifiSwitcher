@@ -79,6 +79,84 @@
                            FontFamily="{DynamicResource Theme.FontFamily}"
                            FontSize="9" Foreground="{DynamicResource TextMuted}"
                            Margin="0,0,0,14"/>
+<<<<<<< Updated upstream
+=======
+
+                <!-- Scripts section -->
+                <TextBlock Text="{Binding [TunnelScriptsHeader], Source={x:Static local:Lang.Instance}}"
+                           FontFamily="{DynamicResource Theme.FontFamily}"
+                           FontSize="11" FontWeight="Bold"
+                           Foreground="{DynamicResource TextPrimary}"
+                           Margin="0,0,0,4"/>
+                <TextBlock Text="{Binding [TunnelScriptsInfo], Source={x:Static local:Lang.Instance}}"
+                           FontFamily="{DynamicResource Theme.FontFamily}"
+                           FontSize="9" Foreground="{DynamicResource TextMuted}"
+                           TextWrapping="Wrap" Margin="0,0,0,10"/>
+
+                <!-- Pre-connect -->
+                <TextBlock Text="{Binding [TunnelScriptPreConnect], Source={x:Static local:Lang.Instance}}"
+                           FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"
+                           FontWeight="Bold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,4"/>
+                <Grid Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0" x:Name="PreConnectBox"
+                             FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11" Padding="6,4"/>
+                    <Button Grid.Column="1" Content="{Binding [BtnBrowse], Source={x:Static local:Lang.Instance}}"
+                            Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,4"
+                            Margin="4,0,0,0" Click="BrowsePreConnect_Click"/>
+                </Grid>
+
+                <!-- Post-connect -->
+                <TextBlock Text="{Binding [TunnelScriptPostConnect], Source={x:Static local:Lang.Instance}}"
+                           FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"
+                           FontWeight="Bold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,4"/>
+                <Grid Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0" x:Name="PostConnectBox"
+                             FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11" Padding="6,4"/>
+                    <Button Grid.Column="1" Content="{Binding [BtnBrowse], Source={x:Static local:Lang.Instance}}"
+                            Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,4"
+                            Margin="4,0,0,0" Click="BrowsePostConnect_Click"/>
+                </Grid>
+
+                <!-- Pre-disconnect -->
+                <TextBlock Text="{Binding [TunnelScriptPreDisconnect], Source={x:Static local:Lang.Instance}}"
+                           FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"
+                           FontWeight="Bold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,4"/>
+                <Grid Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0" x:Name="PreDisconnectBox"
+                             FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11" Padding="6,4"/>
+                    <Button Grid.Column="1" Content="{Binding [BtnBrowse], Source={x:Static local:Lang.Instance}}"
+                            Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,4"
+                            Margin="4,0,0,0" Click="BrowsePreDisconnect_Click"/>
+                </Grid>
+
+                <!-- Post-disconnect -->
+                <TextBlock Text="{Binding [TunnelScriptPostDisconnect], Source={x:Static local:Lang.Instance}}"
+                           FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"
+                           FontWeight="Bold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,4"/>
+                <Grid Margin="0,0,0,14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0" x:Name="PostDisconnectBox"
+                             FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11" Padding="6,4"/>
+                    <Button Grid.Column="1" Content="{Binding [BtnBrowse], Source={x:Static local:Lang.Instance}}"
+                            Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,4"
+                            Margin="4,0,0,0" Click="BrowsePostDisconnect_Click"/>
+                </Grid>
+>>>>>>> Stashed changes
             </StackPanel>
 
             <!-- Button bar -->

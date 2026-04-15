@@ -257,6 +257,18 @@
   "TunnelDialogNotes": "Notities",
   "TunnelDialogNotesHint": "Optioneel. Weergegeven als tooltip bij de tunnelnaam.",
   "TunnelDialogGroup": "Groep",
+<<<<<<< Updated upstream
+=======
+  "TunnelDialogTabScripts": "Scripts",
+  "TunnelScriptsHeader": "Scripts",
+  "TunnelScriptsInfo": "Voer een .bat of .ps1 bestand uit (of sla de inhoud inline op) voor of na het verbinden/verbreken van een tunnel.",
+  "TunnelScriptPreConnect": "Voor verbinding",
+  "TunnelScriptPostConnect": "Na verbinding",
+  "TunnelScriptPreDisconnect": "Voor verbreking",
+  "TunnelScriptPostDisconnect": "Na verbreking",
+  "TunnelScriptBrowseTitle": "Selecteer scriptbestand",
+  "BtnEmbed": "Insluiten",
+>>>>>>> Stashed changes
   "SettingsSectionGroups": "TUNNELGROEPEN",
   "SettingsGroupsDesc": "Organiseer tunnels in inklapbare secties. Gebruik ↑↓ om te sorteren.",
   "BtnAddGroup": "＋ Toevoegen",

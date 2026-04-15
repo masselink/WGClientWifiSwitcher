@@ -44,6 +44,7 @@
   "colorTrayHover": "",
   "colorTrayText": "",
   "colorTrayBorder": "",
+<<<<<<< Updated upstream
   "colorTrayImageMargin": "",
   "_hints": {
     "name": "Display name shown in the theme picker.",
@@ -94,4 +95,7 @@
     "colorTrayBorder": "Tray menu border and separator. Leave empty to inherit colorBorder.",
     "colorTrayImageMargin": "Tray menu left image-margin column. Leave empty to inherit colorWindowBg."
   }
+=======
+  "colorTrayImageMargin": ""
+>>>>>>> Stashed changes
 }
