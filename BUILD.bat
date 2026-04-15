@@ -34,7 +34,7 @@ pause & exit /b 1
 :sdk_ok
 echo.
 
-rem ── Step 2: compile the application first ────────────────────────────────────
+rem ── Step 2: compile the application ─────────────────────────────────────────
 echo  -------------------------------------------------------
 echo   Compiling MasselGUARD...
 echo  -------------------------------------------------------
@@ -58,59 +58,90 @@ echo.
 echo  Compile OK -- MasselGUARD.exe ready.
 echo.
 
-rem ── Step 3: ask about DLLs (only after a successful compile) ─────────────────
+rem ── Step 3: copy theme folder into dist ──────────────────────────────────────
+echo  -------------------------------------------------------
+echo   Copying theme folder...
+echo  -------------------------------------------------------
+if exist "%~dp0theme" (
+    if exist "%~dp0dist\theme" rmdir /s /q "%~dp0dist\theme"
+    xcopy /e /i /q "%~dp0theme" "%~dp0dist\theme" >nul
+    echo  Theme folder copied to dist\theme\
+) else (
+    echo  WARNING: theme folder not found -- skipped.
+)
+echo.
+
+rem ── Step 4: DLLs ─────────────────────────────────────────────────────────────
 echo  -------------------------------------------------------
 echo   Local tunnel DLLs (tunnel.dll + wireguard.dll)
 echo  -------------------------------------------------------
 echo.
-echo   Standalone local tunnels require two DLLs next to the
-echo   exe. tunnel.dll bundles the WireGuardNT kernel driver
-echo   so no WireGuard for Windows installation is needed.
+echo   Standalone local tunnels require tunnel.dll + wireguard.dll
+echo   next to the exe. Choose how to obtain them:
 echo.
-echo   [Y] Build   -- build tunnel.dll from source (Go+gcc)
-echo                  and download wireguard-NT wireguard.dll
-echo   [N] Skip    -- add DLLs manually, or download below
+echo   [1] Use provided DLLs  -- use the DLLs already included
+echo                             next to BUILD.bat (recommended)
+echo   [2] Build from source  -- compile tunnel.dll (needs Go + gcc)
+echo   [3] Download           -- download pre-built DLLs from GitHub
+echo   [4] Skip               -- add DLLs manually later
 echo.
 
 set DLL_CHOICE=
-set /p DLL_CHOICE="  Build DLLs from source? [Y/N]: "
-if /i "!DLL_CHOICE!"=="Y"   goto do_build
-if /i "!DLL_CHOICE!"=="YES" goto do_build
-goto ask_dl
+set /p DLL_CHOICE="  Choose [1/2/3/4]: "
 
+if "!DLL_CHOICE!"=="1" goto use_provided
+if "!DLL_CHOICE!"=="2" goto do_build
+if "!DLL_CHOICE!"=="3" goto do_dl
+goto dll_done
+
+rem ── Option 1: use provided DLLs ─────────────────────────────────────────────
+:use_provided
+echo.
+echo  Copying provided DLLs...
+set DIST=%~dp0dist
+set SRC=%~dp0
+set OK=1
+
+if exist "!SRC!tunnel.dll" (
+    copy /y "!SRC!tunnel.dll" "!DIST!tunnel.dll" >nul
+    echo    Copied: tunnel.dll
+) else (
+    echo  ERROR: tunnel.dll not found next to BUILD.bat.
+    set OK=0
+)
+
+if exist "!SRC!wireguard.dll" (
+    copy /y "!SRC!wireguard.dll" "!DIST!wireguard.dll" >nul
+    echo    Copied: wireguard.dll
+) else (
+    echo  ERROR: wireguard.dll not found next to BUILD.bat.
+    set OK=0
+)
+
+if "!OK!"=="1" (
+    set DO_COPY_DLLS=1
+    goto dll_done
+)
+echo.
+echo  One or more provided DLLs were missing. Falling through to warning.
+goto dll_warn
+
+rem ── Option 2: build from source ─────────────────────────────────────────────
 :do_build
 set DEPS=%~dp0deps
 set DIST=%~dp0dist
 if not exist "!DEPS!" mkdir "!DEPS!"
 echo.
-echo  Building tunnel.dll from source and getting wireguard.dll...
+echo  Building tunnel.dll from source...
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0get-wireguard-dlls.ps1" -Deps "!DEPS!" -Dist "!DIST!"
-if errorlevel 1 ( echo. & echo  ERROR: Failed to prepare DLLs. & goto dll_warn )
-if not exist "!DIST!\wireguard.dll" ( echo  ERROR: wireguard.dll missing after build. & goto dll_warn )
-if not exist "!DIST!\tunnel.dll"    ( echo  ERROR: tunnel.dll missing after build.    & goto dll_warn )
+if errorlevel 1 ( echo. & echo  ERROR: DLL build failed. & goto dll_warn )
+if not exist "!DIST!\wireguard.dll" ( echo  ERROR: wireguard.dll missing. & goto dll_warn )
+if not exist "!DIST!\tunnel.dll"    ( echo  ERROR: tunnel.dll missing.    & goto dll_warn )
 set DO_COPY_DLLS=1
-goto done
+goto dll_done
 
-:ask_dl
-echo.
-echo  -------------------------------------------------------
-echo   Download pre-built DLLs from GitHub?
-echo  -------------------------------------------------------
-echo.
-echo   Pre-built tunnel.dll + wireguard-NT wireguard.dll from:
-echo   github.com/masselink/MasselGUARD (wireguard-deps)
-echo.
-echo   [Y] Download -- fast, no tools needed
-echo   [N] Skip     -- add DLLs manually after building
-echo.
-
-set DL_CHOICE=
-set /p DL_CHOICE="  Download pre-built DLLs from GitHub? [Y/N]: "
-if /i "!DL_CHOICE!"=="Y"   goto do_dl
-if /i "!DL_CHOICE!"=="YES" goto do_dl
-goto done
-
+rem ── Option 3: download pre-built DLLs ───────────────────────────────────────
 :do_dl
 set DIST=%~dp0dist
 echo.
@@ -129,16 +160,15 @@ if not exist "!DIST!\tunnel.dll"    goto dll_warn
 echo.
 echo  DLLs downloaded successfully.
 set DO_COPY_DLLS=1
-goto done
+goto dll_done
 
 :dll_warn
 echo.
 echo  WARNING: DLLs not available.
 echo  Place tunnel.dll + wireguard.dll next to MasselGUARD.exe manually.
 echo  (Companion mode works without them; Standalone mode requires them.)
-goto done
 
-:done
+:dll_done
 echo.
 echo  ==========================================
 echo   BUILD SUCCESSFUL
@@ -146,6 +176,7 @@ echo  ==========================================
 echo.
 echo   dist\MasselGUARD.exe
 echo   dist\lang\
+echo   dist\theme\
 if "!DO_COPY_DLLS!"=="1" (
     echo   dist\wireguard.dll
     echo   dist\tunnel.dll

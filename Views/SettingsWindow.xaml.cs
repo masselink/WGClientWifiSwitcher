@@ -21,13 +21,20 @@ namespace MasselGUARD.Views
 
             // ── Log level ────────────────────────────────────────────────────
             LogLevelPicker.Items.Add(Lang.T("LogLevelNormal"));
+            LogLevelPicker.Items.Add(Lang.T("LogLevelInfo"));
+            LogLevelPicker.Items.Add(Lang.T("LogLevelVerbose"));
             LogLevelPicker.Items.Add(Lang.T("LogLevelDebug"));
-            LogLevelPicker.SelectedIndex = _main.GetConfig().LogLevelSetting == "debug" ? 1 : 0;
+            LogLevelPicker.SelectedIndex = _main.GetConfig().LogLevelSetting switch
+            {
+                "info"    => 1,
+                "verbose" => 2,
+                "debug"   => 3,
+                _         => 0,
+            };
 
             // ── Language ─────────────────────────────────────────────────────
             foreach (var (code, name) in Lang.AvailableLanguages())
                 LanguagePicker.Items.Add(new LangItem(code, name));
-            LanguagePicker.DisplayMemberPath = "Name";
             foreach (LangItem item in LanguagePicker.Items)
             {
                 if (item.Code == Lang.Instance.CurrentCode)
@@ -211,6 +218,7 @@ namespace MasselGUARD.Views
             if (_loading) return;
             if (LanguagePicker.SelectedItem is LangItem item)
             {
+                _main.LogInfoPublic($"Language: {item.Display}");
                 Lang.Instance.Load(item.Code);
                 AppConfig.SaveLanguage(item.Code);
             }
@@ -313,6 +321,7 @@ namespace MasselGUARD.Views
             var newMode = SelectedMode();
             if (cfg.Mode != newMode)
             {
+                _main.LogInfoPublic($"App mode: {newMode}");
                 _main.SetMode(newMode);
                 _main.ApplyLocalTunnelModePublic();
             }
@@ -321,12 +330,24 @@ namespace MasselGUARD.Views
             bool newManual = ManualModeToggle.IsChecked == true;
             if (cfg.ManualMode != newManual)
             {
+                _main.LogInfoPublic(newManual
+                    ? "Automation: disabled (manual mode)"
+                    : "Automation: enabled");
                 cfg.ManualMode = newManual;
                 _main.ApplyManualMode();
             }
 
             // Log level
-            cfg.LogLevelSetting = LogLevelPicker.SelectedIndex == 1 ? "debug" : "normal";
+            var newLogLevel = LogLevelPicker.SelectedIndex switch
+            {
+                1 => "info",
+                2 => "verbose",
+                3 => "debug",
+                _ => "normal",
+            };
+            if (cfg.LogLevelSetting != newLogLevel)
+                _main.LogInfoPublic($"Log level changed: {newLogLevel}");
+            cfg.LogLevelSetting = newLogLevel;
 
             // Suppress update prompt
             cfg.SuppressPortableUpdatePrompt = SuppressUpdatePromptToggle.IsChecked == true;
@@ -753,14 +774,12 @@ namespace MasselGUARD.Views
             var cfg = _main.GetConfig();
             cfg.ActiveDarkTheme = item.FolderName;
 
-            // If not auto mode, apply immediately when this is the active type
-            bool currentIsDark = ThemeManager.Instance.Current.Type
-                .Equals("dark", StringComparison.OrdinalIgnoreCase);
             if (!cfg.AutoTheme || ThemeManager.GetSystemIsDark())
             {
                 ThemeManager.Instance.Load(item.FolderName);
                 cfg.ActiveTheme = item.FolderName;
             }
+            _main.LogInfoPublic($"Theme (dark): {item.DisplayName}");
             AppConfig.SaveThemeConfig(cfg.ActiveTheme, cfg.ActiveDarkTheme,
                                       cfg.ActiveLightTheme, cfg.AutoTheme);
             _main.UpdateThemeToggleIcon();
@@ -775,13 +794,13 @@ namespace MasselGUARD.Views
             var cfg = _main.GetConfig();
             cfg.ActiveLightTheme = item.FolderName;
 
-            // Apply immediately if system is light or auto is off and current is light
             if (cfg.AutoTheme ? !ThemeManager.GetSystemIsDark() :
                 ThemeManager.Instance.Current.Type.Equals("light", StringComparison.OrdinalIgnoreCase))
             {
                 ThemeManager.Instance.Load(item.FolderName);
                 cfg.ActiveTheme = item.FolderName;
             }
+            _main.LogInfoPublic($"Theme (light): {item.DisplayName}");
             AppConfig.SaveThemeConfig(cfg.ActiveTheme, cfg.ActiveDarkTheme,
                                       cfg.ActiveLightTheme, cfg.AutoTheme);
             _main.UpdateThemeToggleIcon();

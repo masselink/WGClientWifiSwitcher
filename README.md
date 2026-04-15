@@ -1,54 +1,78 @@
-# MasselGUARD v2.3.0
+# MasselGUARD
 
 **Automated WireGuard tunnel management for Windows**
 
-MasselGUARD sits in the system tray and watches your WiFi. When you connect to a known network it activates the right WireGuard tunnel automatically. When you leave or connect to an unknown network a configurable default action fires — disconnect, activate a fallback tunnel, or do nothing. It also works as a manual client: connect and disconnect tunnels from the tunnel list or the tray menu without opening the WireGuard GUI.
+MasselGUARD sits in the system tray and watches your WiFi. When you connect to a known network it activates the right WireGuard tunnel automatically. When you leave, or land on an unknown network, a configurable default action fires — disconnect all tunnels, switch to a fallback, or do nothing. It also works as a pure manual client when automation is not wanted.
+
+> **Detailed documentation** → [`docs/MasselGUARD.md`](docs/MasselGUARD.md)  
+> **Version history** → [`docs/changelog.md`](docs/changelog.md)
 
 ---
 
-## Three operating modes
+## The idea
 
-### 1 — Standalone
+Most WireGuard users end up with the same problem: they have several tunnel profiles for different contexts — a home router, an office gateway, a travel VPN — and they keep forgetting to switch. MasselGUARD solves this by tying tunnel selection to the WiFi network you are on. You configure the rules once; from then on the right tunnel is active before your browser even opens.
 
-Manages WireGuard tunnels entirely without the official WireGuard application. Uses `tunnel.dll` and `wireguard.dll` (wireguard-NT) placed next to the executable.
+For users who do not want automation, MasselGUARD is also a clean WireGuard front-end: a compact tunnel list, one-click connect and disconnect, and a tray icon that shows at a glance whether anything is active.
 
-- Create and edit tunnel configs inside the app
-- Configs encrypted with DPAPI and stored as `.conf.dpapi` files
-- A transient `WireGuardTunnel$<n>` Windows service is installed, started, and removed on each connect/disconnect
+---
 
-### 2 — WireGuard Companion
+## Operating modes
 
-Works alongside the official WireGuard for Windows application. Automates connecting and disconnecting existing tunnels based on WiFi rules — no configs are stored or managed.
+### Standalone
+No WireGuard app required. MasselGUARD manages tunnels entirely using `tunnel.dll` and `wireguard.dll` (wireguard-NT). Tunnel configs are created and edited inside the app, encrypted with DPAPI, and stored locally.
 
-- Link tunnel profiles via **Import → Link to WireGuard profile**
-- Unlink a profile at any time from the tunnel list
-- WireGuard GUI and its live log accessible from the toolbar
+### Companion
+Works alongside the official WireGuard for Windows application. MasselGUARD automates connecting and disconnecting existing WireGuard profiles based on WiFi rules without touching any config files.
 
-### 3 — Mixed
-
-Both modes active simultaneously. Manage standalone local tunnels and automate WireGuard-app tunnels side by side.
+### Mixed
+Both modes active simultaneously — manage standalone local tunnels and automate WireGuard profiles side by side.
 
 ---
 
 ## Features
 
-| Feature | Description |
+### Automation
+| | |
 |---|---|
-| **Auto-switching** | Instant WiFi-triggered activation via `WlanRegisterNotification` — no polling |
-| **WiFi rules** | Map any SSID to any tunnel; leave blank to disconnect on that network |
-| **Default action** | Do nothing / disconnect all / activate a named fallback tunnel |
-| **Open network protection** | Automatically activate a chosen tunnel on open (passwordless) WiFi, before any rule is evaluated |
-| **Quick Connect** | Open any `.conf` or `.conf.dpapi` and connect instantly without importing; appears in the tunnel list and can be disconnected from there |
-| **Tunnel list** | Live status; connect or disconnect with one click; Delete / Unlink / Remove button morphs based on selection |
-| **System tray** | Coloured dot when connected; toggle tunnels from the tray menu |
-| **Tray toast** | Branded popup near the tray when a tunnel switches while the app is hidden; shows reason (WiFi rule, default behaviour, open network protection) |
-| **WireGuard log** | Live-tailing log window (Companion + Mixed, shown only when a WireGuard tunnel is active) |
-| **Orphaned service cleanup** | Detect and remove `WireGuardTunnel$` SCM entries left behind after a crash; accessible in Settings → Advanced |
-| **Setup wizard** | First-run wizard covering language, mode, and automation settings; re-runnable from Settings |
-| **Multi-language** | 🇬🇧 English, 🇳🇱 Dutch, 🇩🇪 German, 🇫🇷 French, 🇪🇸 Spanish — add any language by dropping a JSON file in `lang\` |
-| **Manual mode** | Disable WiFi-based auto-switching; control everything by hand |
-| **Install / Uninstall** | Built-in installer: copies to Program Files, Start Menu shortcut, optional auto-start |
-| **Update checker** | Compares running version against GitHub tags; shows update button when behind, witty message when ahead |
+| **WiFi rules** | Map any SSID to any tunnel. Leave the tunnel field empty to disconnect on that network. |
+| **Default action** | Do nothing / disconnect all / activate a named fallback tunnel when no rule matches. |
+| **Open network protection** | Automatically activates a chosen tunnel on open (passwordless) WiFi — runs before any rule is evaluated. |
+| **Manual mode** | Disable all WiFi-based automation; control tunnels by hand. |
+
+### Tunnel management
+| | |
+|---|---|
+| **Tunnel groups** | Organise tunnels into named categories (Work, Personal, Travel, …). Switch between them via tabs above the tunnel list. Uncategorized always available. |
+| **Tunnel list** | Live status, one-click connect/disconnect. Action button morphs: Delete / Remove / Unlink depending on type and availability. |
+| **Quick Connect** | Open any `.conf` or `.conf.dpapi` from disk and connect instantly without importing. Appears in the tunnel list; disconnect from there. |
+| **Import** | Import a `.conf` file (Standalone) or link an existing WireGuard profile (Companion). |
+| **Notes** | Add notes to any tunnel — shown as a tooltip on the tunnel name. |
+
+### Interface
+| | |
+|---|---|
+| **Two-panel layout** | Left: tunnel list with category tabs. Right: Options panel with Activity Log, Rules, Default Action, Open Network tabs. |
+| **System tray** | Coloured dot indicator when connected. Tunnel toggle from tray menu. |
+| **Tray toast** | Branded popup near the tray on auto-switch, showing the tunnel name and the reason (rule, default, open network). |
+| **Activity log** | Timestamped log of all events. Four verbosity levels: Normal, Info, Verbose, Debug. Export to `.txt`. |
+
+### Themes
+| | |
+|---|---|
+| **Built-in themes** | Default Dark, Default Light, Grey Dark (sharp corners), Grey Light (sharp corners). |
+| **Custom themes** | Drop a `theme.json` folder next to the exe. Full colour palette, corner radius, font, window opacity, title bar chrome, status bar visibility, custom logo, tray menu colours. |
+| **Auto-switching** | Follows Windows dark/light system preference automatically. |
+| **Hot-swap** | Themes apply instantly without restart. |
+
+### Settings
+| | |
+|---|---|
+| **Multi-language** | 🇬🇧 English · 🇳🇱 Dutch · 🇩🇪 German · 🇫🇷 French · 🇪🇸 Spanish. Add any language by dropping a JSON file in `lang\`. |
+| **Setup wizard** | First-run wizard for language, mode, and automation. Re-runnable from Settings. |
+| **Install / Uninstall** | Built-in installer: copies to Program Files, Start Menu shortcut, optional auto-start. |
+| **Orphan cleanup** | Detect and remove `WireGuardTunnel$` SCM entries left behind after a crash. |
+| **Update checker** | Compares running version against GitHub tags. |
 
 ---
 
@@ -58,178 +82,20 @@ Both modes active simultaneously. Manage standalone local tunnels and automate W
 |---|---|
 | OS | Windows 10 or 11 (x64) |
 | Runtime | [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) |
-| Rights | Administrator — UAC prompt on launch |
-| **Standalone / Mixed** | `tunnel.dll` + `wireguard.dll` (wireguard-NT) next to the exe |
-| **Companion / Mixed** | [WireGuard for Windows](https://wireguard.com/install) installed |
-
-### Getting the DLLs (Standalone / Mixed)
-
-| File | Source |
-|---|---|
-| `wireguard.dll` | wireguard-NT (~1.3 MB) from [download.wireguard.com/wireguard-nt](https://download.wireguard.com/wireguard-nt/). **Do not use** `wireguard.dll` from `C:\Program Files\WireGuard\` (~400 KB) — that version depends on `wireguard.sys` being pre-installed |
-| `tunnel.dll` | Build from [wireguard-windows/embeddable-dll-service](https://github.com/WireGuard/wireguard-windows/tree/master/embeddable-dll-service) or download from the MasselGUARD repo |
-
-Both files go next to `MasselGUARD.exe` in the `dist\` folder.
+| Elevation | Administrator (UAC prompt on launch) |
+| Standalone / Mixed | `tunnel.dll` + `wireguard.dll` (wireguard-NT) next to the exe |
+| Companion / Mixed | [WireGuard for Windows](https://wireguard.com/install) installed |
 
 ---
 
-## How Standalone mode works
+## Quick start
 
-```
-User clicks Connect
-        │
-        ▼
-MainWindow.StartTunnel()
-  ├─ Validate DLLs (wireguard-NT size check)
-  ├─ DpapiDecrypt(.conf.dpapi) → plaintext
-  ├─ WriteSecure(tunnels\temp\<n>.conf)
-  │    └─ File.Create (empty) → SetAccessControl (SYSTEM+Admins+user)
-  │       → StreamWriter (write plaintext)
-  │
-  ▼
-TunnelDll.Connect()
-  ├─ EnsureStopped (remove stale SCM entry)
-  ├─ CreateService("WireGuardTunnel$<n>",
-  │    binaryPath = "MasselGUARD.exe /service <conf>")
-  ├─ ChangeServiceConfig2(SERVICE_SID_TYPE_UNRESTRICTED)
-  └─ sc.Start()
-        │
-        ▼  (SCM spawns child process)
-MasselGUARD.exe /service <conf>   ← runs as LocalSystem
-  ├─ SetDllDirectory(exeDir)       ← so tunnel.dll finds wireguard.dll
-  ├─ SetCurrentDirectory(exeDir)
-  └─ WireGuardTunnelService(<conf>)
-        │
-        ▼
-tunnel.dll installs wireguard-NT kernel driver,
-brings tunnel up in kernel space, then exits (~50–100 ms).
-Service process exits. Tunnel lives in kernel driver.
-
-Back in MasselGUARD:
-  └─ Poll SCM: Running or Stopped → success
-  └─ Delete tunnels\temp\<n>.conf immediately
-```
-
-On **disconnect**: `TunnelDll.Disconnect()` stops and removes the SCM entry. The kernel driver tears down the tunnel.
-
----
-
-## File and directory layout
-
-```
-<ExeDir>\                            ExeDir = exe location (Program Files when installed)
-│
-├── MasselGUARD.exe
-├── tunnel.dll                       wireguard-windows embeddable-dll-service
-├── wireguard.dll                    wireguard-NT (embeds kernel driver)
-├── service-debug.log                written by the service child process
-│
-├── lang\
-│   ├── en.json
-│   ├── nl.json
-│   ├── de.json
-│   ├── fr.json
-│   └── es.json
-│
-└── tunnels\                         local tunnel storage
-    ├── home.conf.dpapi              DPAPI-encrypted, CurrentUser scope
-    ├── office.conf.dpapi
-    └── temp\                        transient plaintext copies for the service
-            (empty when no tunnel is connecting)
-```
-
-**User config:** `%APPDATA%\MasselGUARD\config.json`
-
-Key fields:
-
-```json
-{
-  "Rules":               [{"Ssid": "HomeWifi", "Tunnel": "home"}],
-  "DefaultAction":       "activate",
-  "DefaultTunnel":       "home",
-  "OpenWifiTunnel":      "home",
-  "Mode":                "Standalone",
-  "ManualMode":          false,
-  "Language":            "en",
-  "ShowTrayPopupOnSwitch": true
-}
-```
-
----
-
-## Security
-
-### DPAPI encryption
-
-Local tunnel configs are stored as `.conf.dpapi` files encrypted with Windows **Data Protection API (DPAPI)** using `DataProtectionScope.CurrentUser`.
-
-- Only the Windows user account that created the file can decrypt it
-- The decryption key is derived from the user's login credentials by the OS
-- Moving the file to another machine or user account makes it unreadable
-- No passwords or keys are stored by the application
-
-### Atomic temp file creation
-
-When connecting, a plaintext copy of the config is written to `tunnels\temp\` so the `LocalSystem` service process can read it. The file is created with the correct ACL **from the first byte** — there is no window during which the file exists with inherited (looser) permissions:
-
-```csharp
-using (var empty = File.Create(path)) { }          // create empty, inherits parent ACL
-new FileInfo(path).SetAccessControl(fileSec);       // lock down before writing
-using var sw = new StreamWriter(new FileStream(...)); // write plaintext
-```
-
-ACL on the temp file: SYSTEM + Administrators + owning user only.
-
-### Temp file lifetime
-
-The plaintext temp file is deleted **immediately after `TunnelDll.Connect` returns** — once the service child process has called `WireGuardTunnelService()` the kernel driver has parsed the config and the file is no longer needed. Typical lifetime: under 200 ms. `StopTunnel` makes a second best-effort delete as a safety net.
-
-### Service name sanitisation
-
-`SafeName()` replaces spaces, backslashes, and all `Path.GetInvalidFileNameChars()` with underscores before using a tunnel name as an SCM service name or filename. The display name (with spaces) is preserved in `config.json` and the UI.
-
-### ACL summary
-
-| Location | ACL |
-|---|---|
-| `tunnels\` directory | SYSTEM + Administrators: Full Control (inherited); Authenticated Users: list/traverse only (not inherited onto files) |
-| `tunnels\<n>.conf.dpapi` | SYSTEM + Administrators + owning user: Full Control; protected (no inheritance) |
-| `tunnels\temp\` directory | SYSTEM + Administrators + current user: Full Control; protected |
-| `tunnels\temp\<n>.conf` | Created with `FileSecurity`: SYSTEM + Administrators + current user only; deleted within ~200 ms |
-
----
-
-## Quick Connect
-
-Quick Connect opens a `.conf` or `.conf.dpapi` file from anywhere on disk and connects immediately — no import, no permanent storage.
-
-1. Click **⚡ Quick Connect** in the status bar
-2. Pick a `.conf` or `.conf.dpapi` file
-3. The tunnel activates; a `⚡ <name>` entry appears at the top of the tunnel list
-4. Click either the status-bar button or the tunnel list entry to disconnect
-
-The config is decrypted if necessary, written securely to `tunnels\temp\`, and deleted immediately after the service starts.
-
----
-
-## Open network protection
-
-When the device connects to a WiFi network with no password (open/unsecured), MasselGUARD detects this via `WLAN_SECURITY_ATTRIBUTES.bSecurityEnabled` (offset 580 in `WLAN_CONNECTION_ATTRIBUTES`) and activates the configured protection tunnel **before** any SSID rule or default action is evaluated.
-
-Configure the tunnel in the **Default Action** section of the main window, or leave it set to "— none —" to disable the feature.
-
----
-
-## Orphaned service cleanup
-
-`WireGuardTunnel$` services can be left in the Windows SCM after a crash or forced process termination (`OnExit` never runs, so `DisconnectAll()` is not called). These services:
-
-- Consume a small amount of SCM resources
-- Can prevent a tunnel from reconnecting if the same service name is already registered
-
-MasselGUARD detects orphans by enumerating `WireGuardTunnel$` entries in the SCM that are not in `config.json`, and checks whether a WireGuard network adapter with the same name still exists (indicating the kernel tunnel is still live).
-
-Cleanup is available in **Settings → Advanced → Possible Orphaned Tunnel Services**. A warning is also logged at startup if orphans are found.
+1. Download and extract the release zip
+2. Run `MasselGUARD.exe` (accept UAC prompt)
+3. The setup wizard opens — choose your language, mode, and whether to enable automation
+4. Add tunnels (Standalone: **+ Add**, Companion: **Import → Link to WireGuard profile**)
+5. Add WiFi rules under **Options → Rules**
+6. MasselGUARD handles the rest from the tray
 
 ---
 
@@ -239,24 +105,12 @@ Cleanup is available in **Settings → Advanced → Possible Orphaned Tunnel Ser
 BUILD.bat
 ```
 
-The script compiles first and only asks about DLLs after a successful build.
-
-Manual:
-
-```bat
-dotnet publish MasselGUARD.csproj -c Release -r win-x64 --self-contained false -o dist
-```
-
-Copy `tunnel.dll` and `wireguard.dll` into `dist\` to enable Standalone mode.
+Compiles the project, copies the theme folder, then prompts for DLLs (use the included ones, build from source, download from GitHub, or skip). See [`docs/MasselGUARD.md`](docs/MasselGUARD.md#15-build-and-deployment) for full build details.
 
 ---
 
-## Troubleshooting
+## Security
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| "Cannot find file" in Event Viewer | Wrong `wireguard.dll` (WireGuard-app version, not wireguard-NT) | Use the ~1.3 MB wireguard-NT DLL from download.wireguard.com/wireguard-nt |
-| Event Viewer termination error even when tunnel works | wireguard-NT service exits fast after tunnel is up — SCM logs a false positive | Ignore; check the tunnel list for green status |
-| Config file not found on connect | Tunnel created with an older version; migration runs automatically on first connect | If migration fails, delete and re-add the tunnel |
-| Quick Connect fails | DLLs missing, or file is not valid WireGuard syntax | Check DLL status in Settings; validate the `.conf` file |
-| Orphaned services at startup | App was killed while a tunnel was active | Use Settings → Advanced → Possible Orphaned Tunnel Services to remove them |
+Tunnel configs are encrypted with Windows DPAPI (`CurrentUser` scope) — only the Windows account that created the file can read it. The plaintext copy written for the service process during connection is locked to `SYSTEM + Administrators + owning user` from the first byte and deleted within ~200 ms.
+
+Full details in [`docs/MasselGUARD.md`](docs/MasselGUARD.md#12-security-model).

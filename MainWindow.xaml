@@ -198,21 +198,17 @@
                 <!-- ── Main content ─────────────────────────────────────────── -->
                 <Grid Grid.Row="4" Margin="14,12,14,8">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="2*"/>
+                        <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="10"/>
-                        <ColumnDefinition Width="3*"/>
+                        <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
 
-                    <!-- LEFT: Tunnels + Rules -->
+                    <!-- LEFT: Tunnels only -->
                     <Grid Grid.Column="0" x:Name="LeftTunnelGrid">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="2*" MinHeight="80"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="10"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="3*" MinHeight="80"/>
+                            <RowDefinition Height="*" MinHeight="80"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
@@ -242,9 +238,11 @@
                                 BorderBrush="{DynamicResource BorderColor}" BorderThickness="0,0,0,1"
                                 Margin="0,0,0,0">
                             <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                                          VerticalScrollBarVisibility="Disabled">
+                                          VerticalScrollBarVisibility="Disabled"
+                                          Background="Transparent">
                                 <StackPanel x:Name="TunnelTabButtons"
-                                            Orientation="Horizontal"/>
+                                            Orientation="Horizontal"
+                                            Background="Transparent"/>
                             </ScrollViewer>
                         </Border>
 
@@ -318,35 +316,82 @@
                                     Click="DeleteTunnel_Click"/>
                         </StackPanel>
 
-                        <!-- Rules panel — hidden in manual mode -->
-                        <Grid Grid.Row="5" Grid.RowSpan="3" x:Name="RulesPanel">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="*"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
+                    </Grid>
 
-                            <Grid Grid.Row="0" Margin="0,0,0,6">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0"
-                                           Text="{Binding [SectionRules], Source={x:Static local:Lang.Instance}}"
-                                           Style="{StaticResource SectionLabel}" Margin="0"/>
-                                <Border Grid.Column="1" x:Name="RuleCountBadge"
-                                        Background="{DynamicResource BorderColor}"
-                                        CornerRadius="8" Padding="6,1" Margin="6,0,0,0"
-                                        VerticalAlignment="Center">
-                                    <TextBlock x:Name="RuleCountLabel"
-                                               FontSize="9"
-                                               Foreground="{DynamicResource TextMuted}" Text="0"/>
-                                </Border>
-                            </Grid>
+                    <!-- RIGHT: Options panel — Activity Log (default) | Rules | Default Action | Open Network -->
+                    <Grid Grid.Column="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
 
-                            <ListView Grid.Row="1" x:Name="RulesListView"
-                                      MinHeight="60"
+                        <!-- OPTIONS header — mirrors TUNNELS label on left -->
+                        <Grid Grid.Row="0" Margin="0,0,0,4">
+                            <TextBlock Text="{Binding [RightPanelHeader], Source={x:Static local:Lang.Instance}}"
+                                       Style="{StaticResource SectionLabel}" Margin="0"/>
+                        </Grid>
+
+                        <!-- Right tab strip — matches left tunnel tab strip styling -->
+                        <Border Grid.Row="1"
+                                Background="{DynamicResource Surface}"
+                                BorderBrush="{DynamicResource BorderColor}" BorderThickness="0,0,0,1">
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="RTabBtnLog"
+                                        Content="{Binding [RTabLog], Source={x:Static local:Lang.Instance}}"
+                                        Tag="Log" Click="RightTab_Click"
+                                        Style="{StaticResource FlatBtn}"
+                                        Background="Transparent" BorderThickness="0,0,0,2"
+                                        BorderBrush="{DynamicResource Accent}"
+                                        Foreground="{DynamicResource Accent}"
+                                        FontSize="9" Padding="8,2" FontWeight="Bold"/>
+                                <Button x:Name="RTabBtnRules"
+                                        Content="{Binding [RTabRules], Source={x:Static local:Lang.Instance}}"
+                                        Tag="Rules" Click="RightTab_Click"
+                                        Style="{StaticResource FlatBtn}"
+                                        Background="Transparent" BorderThickness="0"
+                                        Foreground="{DynamicResource TextMuted}"
+                                        FontSize="9" Padding="8,2"/>
+                                <Button x:Name="RTabBtnDefault"
+                                        Content="{Binding [RTabDefault], Source={x:Static local:Lang.Instance}}"
+                                        Tag="Default" Click="RightTab_Click"
+                                        Style="{StaticResource FlatBtn}"
+                                        Background="Transparent" BorderThickness="0"
+                                        Foreground="{DynamicResource TextMuted}"
+                                        FontSize="9" Padding="8,2"/>
+                                <Button x:Name="RTabBtnOpenWifi"
+                                        Content="{Binding [RTabOpenWifi], Source={x:Static local:Lang.Instance}}"
+                                        Tag="OpenWifi" Click="RightTab_Click"
+                                        Style="{StaticResource FlatBtn}"
+                                        Background="Transparent" BorderThickness="0"
+                                        Foreground="{DynamicResource TextMuted}"
+                                        FontSize="9" Padding="8,2"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Tab content — fills remaining height -->
+                        <Grid Grid.Row="2" Margin="0,8,0,0">
+
+                            <!-- ── ACTIVITY LOG ─────────────────────────────── -->
+                            <Border x:Name="RPageLog"
+                                    Background="{DynamicResource CardBg}"
+                                    BorderBrush="{DynamicResource BorderColor}" BorderThickness="1"
+                                    CornerRadius="{DynamicResource Theme.CornerRadius}">
+                                <RichTextBox x:Name="LogBox"
+                                             Background="{DynamicResource CardBg}"
+                                             Foreground="{DynamicResource TextMuted}"
+                                             FontSize="10"
+                                             BorderThickness="0" IsReadOnly="True"
+                                             Padding="8"
+                                             VerticalScrollBarVisibility="Auto"
+                                             HorizontalScrollBarVisibility="Disabled">
+                                    <FlowDocument x:Name="LogDocument"/>
+                                </RichTextBox>
+                            </Border>
+
+                            <!-- ── RULES ────────────────────────────────────── -->
+                            <ListView x:Name="RulesListView" Visibility="Collapsed"
                                       ScrollViewer.VerticalScrollBarVisibility="Auto"
                                       SelectionChanged="RulesListView_SelectionChanged">
                                 <ListView.View>
@@ -355,113 +400,101 @@
                                                         Width="200"
                                                         DisplayMemberBinding="{Binding Ssid}"/>
                                         <GridViewColumn Header="{Binding [RuleColTunnel], Source={x:Static local:Lang.Instance}}"
-                                                        Width="170"
+                                                        Width="200"
                                                         DisplayMemberBinding="{Binding TunnelDisplay}"/>
                                     </GridView>
                                 </ListView.View>
                             </ListView>
 
-                            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
-                                <Button Content="{Binding [BtnAddRule], Source={x:Static local:Lang.Instance}}"
-                                        Style="{StaticResource SuccessBtn}" Click="AddRule_Click"/>
-                                <Button Content="{Binding [BtnEditRule], Source={x:Static local:Lang.Instance}}"
-                                        Style="{StaticResource FlatBtn}"
-                                        Margin="8,0" Click="EditRule_Click"
-                                        x:Name="EditBtn" IsEnabled="False"/>
-                                <Button Content="{Binding [BtnDeleteRule], Source={x:Static local:Lang.Instance}}"
-                                        Style="{StaticResource DangerBtn}"
-                                        Click="DeleteRule_Click"
-                                        x:Name="DeleteBtn" IsEnabled="False"/>
-                            </StackPanel>
-                        </Grid>
-                    </Grid>
-
-                    <!-- RIGHT: Default action + log -->
-                    <Grid Grid.Column="2">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="16"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                        </Grid.RowDefinitions>
-
-                        <!-- Default action panel — hidden in manual mode -->
-                        <StackPanel Grid.Row="0" Grid.RowSpan="2" x:Name="DefaultActionPanel">
-                            <TextBlock Text="{Binding [SectionDefaultAction], Source={x:Static local:Lang.Instance}}"
-                                       Style="{StaticResource SectionLabel}"/>
-
-                            <Border Background="{DynamicResource CardBg}"
+                            <!-- ── DEFAULT ACTION ────────────────────────────── -->
+                            <Border x:Name="RPageDefault" Visibility="Collapsed"
+                                    Background="{DynamicResource CardBg}"
                                     BorderBrush="{DynamicResource BorderColor}" BorderThickness="1"
-                                    CornerRadius="{DynamicResource Theme.CornerRadius}" Padding="12,10">
-                                <StackPanel>
-                                    <TextBlock Text="{Binding [DefaultActionPrompt], Source={x:Static local:Lang.Instance}}"
-                                               FontSize="10" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,8"/>
-                                    <RadioButton x:Name="ActionNone"
-                                                 Content="{Binding [DefaultActionNone], Source={x:Static local:Lang.Instance}}"
-                                                 Checked="DefaultAction_Changed" Tag="none"/>
-                                    <RadioButton x:Name="ActionDiscon"
-                                                 Content="{Binding [DefaultActionDisconnect], Source={x:Static local:Lang.Instance}}"
-                                                 Checked="DefaultAction_Changed" Tag="disconnect"/>
-                                    <RadioButton x:Name="ActionActivate" Margin="0,3,0,0"
-                                                 Checked="DefaultAction_Changed" Tag="activate">
-                                        <RadioButton.Content>
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="{Binding [DefaultActionActivate], Source={x:Static local:Lang.Instance}}"
-                                                           VerticalAlignment="Center"/>
-                                                <ComboBox x:Name="DefaultTunnelBox" Margin="8,0,0,0"
-                                                          MinWidth="140" FontSize="11" IsEditable="True"
-                                                          SelectionChanged="DefaultTunnelBox_SelectionChanged"
-                                                          LostFocus="DefaultTunnelBox_LostFocus"/>
-                                            </StackPanel>
-                                        </RadioButton.Content>
-                                    </RadioButton>
-                                </StackPanel>
-                            </Border>
-
-                            <!-- Open WiFi protection -->
-                            <TextBlock Text="{Binding [SectionOpenWifi], Source={x:Static local:Lang.Instance}}"
-                                       Style="{StaticResource SectionLabel}" Margin="0,14,0,6"/>
-                            <Border Background="{DynamicResource CardBg}"
-                                    BorderBrush="{DynamicResource BorderColor}" BorderThickness="1"
-                                    CornerRadius="{DynamicResource Theme.CornerRadius}" Padding="12,10">
-                                <StackPanel>
-                                    <TextBlock Text="{Binding [OpenWifiLabel], Source={x:Static local:Lang.Instance}}"
-                                               FontSize="11" Foreground="{DynamicResource TextPrimary}" FontWeight="Bold"
-                                               Margin="0,0,0,4"/>
-                                    <TextBlock Text="{Binding [OpenWifiDesc], Source={x:Static local:Lang.Instance}}"
-                                               FontSize="9" Foreground="{DynamicResource TextMuted}"
-                                               TextWrapping="Wrap" Margin="0,0,0,10"/>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="{Binding [OpenWifiTunnel], Source={x:Static local:Lang.Instance}}"
-                                                   FontSize="11" Foreground="{DynamicResource TextMuted}"
-                                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                        <ComboBox x:Name="OpenWifiTunnelBox"
-                                                  MinWidth="160" FontSize="11"
-                                                  SelectionChanged="OpenWifiTunnel_Changed"/>
+                                    CornerRadius="{DynamicResource Theme.CornerRadius}"
+                                    Padding="12,10">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding [DefaultActionPrompt], Source={x:Static local:Lang.Instance}}"
+                                                   FontSize="10" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,8"/>
+                                        <RadioButton x:Name="ActionNone"
+                                                     Content="{Binding [DefaultActionNone], Source={x:Static local:Lang.Instance}}"
+                                                     Checked="DefaultAction_Changed" Tag="none"/>
+                                        <RadioButton x:Name="ActionDiscon"
+                                                     Content="{Binding [DefaultActionDisconnect], Source={x:Static local:Lang.Instance}}"
+                                                     Checked="DefaultAction_Changed" Tag="disconnect"/>
+                                        <RadioButton x:Name="ActionActivate" Margin="0,3,0,0"
+                                                     Checked="DefaultAction_Changed" Tag="activate">
+                                            <RadioButton.Content>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding [DefaultActionActivate], Source={x:Static local:Lang.Instance}}"
+                                                               VerticalAlignment="Center"/>
+                                                    <ComboBox x:Name="DefaultTunnelBox" Margin="8,0,0,0"
+                                                              MinWidth="140" FontSize="11" IsEditable="True"
+                                                              SelectionChanged="DefaultTunnelBox_SelectionChanged"
+                                                              LostFocus="DefaultTunnelBox_LostFocus"/>
+                                                </StackPanel>
+                                            </RadioButton.Content>
+                                        </RadioButton>
                                     </StackPanel>
-                                </StackPanel>
+                                </ScrollViewer>
                             </Border>
-                        </StackPanel>
 
-                        <TextBlock Grid.Row="3"
-                                   Text="{Binding [SectionActivityLog], Source={x:Static local:Lang.Instance}}"
-                                   Style="{StaticResource SectionLabel}"/>
+                            <!-- ── OPEN NETWORK PROTECTION ──────────────────── -->
+                            <Border x:Name="RPageOpenWifi" Visibility="Collapsed"
+                                    Background="{DynamicResource CardBg}"
+                                    BorderBrush="{DynamicResource BorderColor}" BorderThickness="1"
+                                    CornerRadius="{DynamicResource Theme.CornerRadius}"
+                                    Padding="12,10">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding [OpenWifiLabel], Source={x:Static local:Lang.Instance}}"
+                                                   FontSize="11" Foreground="{DynamicResource TextPrimary}" FontWeight="Bold"
+                                                   Margin="0,0,0,4"/>
+                                        <TextBlock Text="{Binding [OpenWifiDesc], Source={x:Static local:Lang.Instance}}"
+                                                   FontSize="9" Foreground="{DynamicResource TextMuted}"
+                                                   TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding [OpenWifiTunnel], Source={x:Static local:Lang.Instance}}"
+                                                       FontSize="11" Foreground="{DynamicResource TextMuted}"
+                                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                            <ComboBox x:Name="OpenWifiTunnelBox"
+                                                      MinWidth="160" FontSize="11"
+                                                      SelectionChanged="OpenWifiTunnel_Changed"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </Border>
 
-                        <Border Grid.Row="4" Background="{DynamicResource CardBg}"
-                                BorderBrush="{DynamicResource BorderColor}" BorderThickness="1"
-                                CornerRadius="{DynamicResource Theme.CornerRadius}">
-                            <RichTextBox x:Name="LogBox"
-                                         Background="{DynamicResource CardBg}"
-                                         Foreground="{DynamicResource TextMuted}"
-                                         FontSize="10"
-                                         BorderThickness="0" IsReadOnly="True"
-                                         Padding="8"
-                                         VerticalScrollBarVisibility="Auto"
-                                         HorizontalScrollBarVisibility="Disabled">
-                                <FlowDocument x:Name="LogDocument"/>
-                            </RichTextBox>
+                        </Grid>
+
+                        <!-- Pinned bottom buttons — always same height as left panel -->
+                        <Border Grid.Row="3" Height="30" Margin="0,6,0,0">
+                            <Grid>
+                                <!-- Rules buttons -->
+                                <StackPanel x:Name="RulesButtonBar"
+                                            Orientation="Horizontal" Visibility="Collapsed">
+                                    <Button Content="{Binding [BtnAddRule], Source={x:Static local:Lang.Instance}}"
+                                            Style="{StaticResource SuccessBtn}" FontSize="10" Padding="10,3"
+                                            Click="AddRule_Click"/>
+                                    <Button Content="{Binding [BtnEditRule], Source={x:Static local:Lang.Instance}}"
+                                            Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
+                                            Margin="6,0,0,0" Click="EditRule_Click"
+                                            x:Name="EditBtn" IsEnabled="False"/>
+                                    <Button Content="{Binding [BtnDeleteRule], Source={x:Static local:Lang.Instance}}"
+                                            Style="{StaticResource DangerBtn}" FontSize="10" Padding="10,3"
+                                            Margin="6,0,0,0" Click="DeleteRule_Click"
+                                            x:Name="DeleteBtn" IsEnabled="False"/>
+                                </StackPanel>
+                                <!-- Log export button -->
+                                <StackPanel x:Name="LogButtonBar"
+                                            Orientation="Horizontal" Visibility="Visible">
+                                    <Button Content="{Binding [BtnExportLog], Source={x:Static local:Lang.Instance}}"
+                                            Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
+                                            Click="ExportLog_Click"/>
+                                </StackPanel>
+                            </Grid>
                         </Border>
+
                     </Grid>
                 </Grid>
 
