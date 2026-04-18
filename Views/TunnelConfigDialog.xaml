@@ -8,9 +8,9 @@
         Background="Transparent" ResizeMode="CanResizeWithGrip"
         WindowStartupLocation="CenterOwner">
 
-    <Border Background="{StaticResource Bg}"
-            BorderBrush="{StaticResource Accent}"
-            BorderThickness="1" CornerRadius="6">
+    <Border Background="{DynamicResource WindowBg}"
+            BorderBrush="{DynamicResource Accent}"
+            BorderThickness="1" CornerRadius="{DynamicResource Theme.CornerRadius}">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="44"/>   <!-- Title bar -->
@@ -20,13 +20,13 @@
             </Grid.RowDefinitions>
 
             <!-- Title bar -->
-            <Border Grid.Row="0" Background="{StaticResource Panel}"
-                    CornerRadius="6,6,0,0"
+            <Border Grid.Row="0" Background="{DynamicResource Surface}"
+                    CornerRadius="{DynamicResource Theme.CornerRadiusTop}"
                     MouseLeftButtonDown="TitleBar_MouseDown">
                 <Grid>
                     <TextBlock x:Name="DialogTitle"
-                               FontFamily="Consolas" FontSize="13" FontWeight="Bold"
-                               Foreground="{StaticResource Accent}"
+                               FontFamily="{DynamicResource Theme.FontFamily}" FontSize="13" FontWeight="Bold"
+                               Foreground="{DynamicResource Accent}"
                                VerticalAlignment="Center" Margin="16,0"/>
                     <Button Content="✕" Style="{StaticResource DangerBtn}"
                             HorizontalAlignment="Right" Padding="10,4" Margin="0,0,8,0"
@@ -37,13 +37,15 @@
 
             <!-- Tunnel name — above tabs, always visible -->
             <Border Grid.Row="1"
-                    Background="{StaticResource Bg}"
-                    BorderBrush="{StaticResource Border}" BorderThickness="0,0,0,1"
+                    Background="{DynamicResource WindowBg}"
+                    BorderBrush="{DynamicResource BorderColor}" BorderThickness="0,0,0,1"
                     Padding="16,10">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="160"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0"
                                Text="{Binding [TunnelDialogName], Source={x:Static local:Lang.Instance}}"
@@ -51,14 +53,21 @@
                                VerticalAlignment="Center"
                                Margin="0,0,12,0"/>
                     <TextBox Grid.Column="1" x:Name="NameBox"
-                             FontFamily="Consolas" FontSize="12"/>
+                             FontFamily="{DynamicResource Theme.FontFamily}" FontSize="12"/>
+                    <TextBlock Grid.Column="2"
+                               Text="{Binding [TunnelDialogGroup], Source={x:Static local:Lang.Instance}}"
+                               Style="{StaticResource FormLabel}"
+                               VerticalAlignment="Center"
+                               Margin="12,0,8,0"/>
+                    <ComboBox Grid.Column="3" x:Name="GroupPicker"
+                              FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"/>
                 </Grid>
             </Border>
 
             <!-- Tab control: Fields / Raw -->
             <TabControl Grid.Row="2" x:Name="Tabs"
-                        Background="{StaticResource Bg}"
-                        BorderBrush="{StaticResource Border}"
+                        Background="{DynamicResource WindowBg}"
+                        BorderBrush="{DynamicResource BorderColor}"
                         BorderThickness="0"
                         Margin="0">
                 <TabControl.Resources>
@@ -70,35 +79,35 @@
                             <Setter.Value>
                                 <ControlTemplate TargetType="TabItem">
                                     <Border x:Name="TabBorder"
-                                            Background="{StaticResource Panel}"
-                                            BorderBrush="{StaticResource Border}"
+                                            Background="{DynamicResource Surface}"
+                                            BorderBrush="{DynamicResource BorderColor}"
                                             BorderThickness="1,1,1,0"
                                             CornerRadius="4,4,0,0"
                                             Margin="0,0,2,0"
                                             Padding="{TemplateBinding Padding}">
                                         <ContentPresenter x:Name="TabLabel"
                                                           ContentSource="Header"
-                                                          TextBlock.Foreground="{StaticResource Sub}"
-                                                          TextBlock.FontFamily="Consolas"
+                                                          TextBlock.Foreground="{DynamicResource TextMuted}"
+                                                          TextBlock.FontFamily="{DynamicResource Theme.FontFamily}"
                                                           TextBlock.FontSize="11"
                                                           VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsSelected" Value="True">
                                             <Setter TargetName="TabBorder" Property="Background"
-                                                    Value="{StaticResource Bg}"/>
+                                                    Value="{DynamicResource WindowBg}"/>
                                             <Setter TargetName="TabBorder" Property="BorderBrush"
-                                                    Value="{StaticResource Accent}"/>
+                                                    Value="{DynamicResource Accent}"/>
                                             <Setter TargetName="TabLabel"
                                                     Property="TextBlock.Foreground"
-                                                    Value="{StaticResource Accent}"/>
+                                                    Value="{DynamicResource Accent}"/>
                                             <Setter TargetName="TabLabel"
                                                     Property="TextBlock.FontWeight"
                                                     Value="Bold"/>
                                         </Trigger>
                                         <Trigger Property="IsMouseOver" Value="True">
                                             <Setter TargetName="TabBorder" Property="Background"
-                                                    Value="{StaticResource Card}"/>
+                                                    Value="{DynamicResource CardBg}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -125,7 +134,7 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBox x:Name="PrivateKeyBox" Grid.Column="0" Margin="0,0,6,0"
-                                         FontFamily="Consolas" FontSize="10"/>
+                                         FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"/>
                                 <Button Grid.Column="1"
                                         Content="{Binding [BtnGenerateKey], Source={x:Static local:Lang.Instance}}"
                                         Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,6"
@@ -134,19 +143,19 @@
 
                             <TextBlock Text="{Binding [TunnelDialogAddress], Source={x:Static local:Lang.Instance}}"
                                        Style="{StaticResource FormLabel}"/>
-                            <TextBox x:Name="AddressBox" Margin="0,0,0,10" FontFamily="Consolas" FontSize="11"/>
+                            <TextBox x:Name="AddressBox" Margin="0,0,0,10" FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"/>
 
                             <TextBlock Text="{Binding [TunnelDialogDns], Source={x:Static local:Lang.Instance}}"
                                        Style="{StaticResource FormLabel}"/>
-                            <TextBox x:Name="DnsBox" Margin="0,0,0,10" FontFamily="Consolas" FontSize="11"/>
+                            <TextBox x:Name="DnsBox" Margin="0,0,0,10" FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"/>
 
                             <TextBlock Text="{Binding [TunnelDialogListenPort], Source={x:Static local:Lang.Instance}}"
                                        Style="{StaticResource FormLabel}"/>
-                            <TextBox x:Name="ListenPortBox" Margin="0,0,0,10" FontFamily="Consolas" FontSize="11"/>
+                            <TextBox x:Name="ListenPortBox" Margin="0,0,0,10" FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"/>
 
                             <TextBlock Text="{Binding [TunnelDialogMtu], Source={x:Static local:Lang.Instance}}"
                                        Style="{StaticResource FormLabel}"/>
-                            <TextBox x:Name="MtuBox" Margin="0,0,0,14" FontFamily="Consolas" FontSize="11"/>
+                            <TextBox x:Name="MtuBox" Margin="0,0,0,14" FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"/>
 
                             <!-- PEER -->
                             <TextBlock Text="{Binding [TunnelDialogPeer], Source={x:Static local:Lang.Instance}}"
@@ -154,23 +163,23 @@
 
                             <TextBlock Text="{Binding [TunnelDialogPublicKey], Source={x:Static local:Lang.Instance}}"
                                        Style="{StaticResource FormLabel}"/>
-                            <TextBox x:Name="PublicKeyBox" Margin="0,0,0,10" FontFamily="Consolas" FontSize="10"/>
+                            <TextBox x:Name="PublicKeyBox" Margin="0,0,0,10" FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"/>
 
                             <TextBlock Text="{Binding [TunnelDialogPresharedKey], Source={x:Static local:Lang.Instance}}"
                                        Style="{StaticResource FormLabel}"/>
-                            <TextBox x:Name="PresharedKeyBox" Margin="0,0,0,10" FontFamily="Consolas" FontSize="10"/>
+                            <TextBox x:Name="PresharedKeyBox" Margin="0,0,0,10" FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"/>
 
                             <TextBlock Text="{Binding [TunnelDialogEndpoint], Source={x:Static local:Lang.Instance}}"
                                        Style="{StaticResource FormLabel}"/>
-                            <TextBox x:Name="EndpointBox" Margin="0,0,0,10" FontFamily="Consolas" FontSize="11"/>
+                            <TextBox x:Name="EndpointBox" Margin="0,0,0,10" FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"/>
 
                             <TextBlock Text="{Binding [TunnelDialogAllowedIPs], Source={x:Static local:Lang.Instance}}"
                                        Style="{StaticResource FormLabel}"/>
-                            <TextBox x:Name="AllowedIPsBox" Margin="0,0,0,10" FontFamily="Consolas" FontSize="11"/>
+                            <TextBox x:Name="AllowedIPsBox" Margin="0,0,0,10" FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"/>
 
                             <TextBlock Text="{Binding [TunnelDialogKeepalive], Source={x:Static local:Lang.Instance}}"
                                        Style="{StaticResource FormLabel}"/>
-                            <TextBox x:Name="KeepaliveBox" Margin="0,0,0,10" FontFamily="Consolas" FontSize="11"/>
+                            <TextBox x:Name="KeepaliveBox" Margin="0,0,0,10" FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"/>
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>
@@ -182,17 +191,157 @@
                     <Grid Margin="12">
                         <TextBox x:Name="RawBox"
                                  AcceptsReturn="True" AcceptsTab="True"
-                                 FontFamily="Consolas" FontSize="11"
+                                 FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"
                                  VerticalScrollBarVisibility="Auto"
                                  HorizontalScrollBarVisibility="Auto"
                                  TextWrapping="NoWrap"
                                  VerticalAlignment="Stretch"/>
                     </Grid>
                 </TabItem>
+                <!-- Scripts tab -->
+                <TabItem x:Name="TabScripts"
+                         Header="{Binding [TunnelDialogTabScripts], Source={x:Static local:Lang.Instance}}">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="12">
+                        <StackPanel>
+                            <TextBlock Text="{Binding [TunnelScriptsInfo], Source={x:Static local:Lang.Instance}}"
+                                       FontFamily="{DynamicResource Theme.FontFamily}" FontSize="9"
+                                       Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap"
+                                       Margin="0,0,0,14"/>
+
+                            <!-- Pre-connect -->
+                            <TextBlock Text="{Binding [TunnelScriptPreConnect], Source={x:Static local:Lang.Instance}}"
+                                       FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"
+                                       FontWeight="Bold" Foreground="{DynamicResource TextPrimary}"
+                                       Margin="0,0,0,4"/>
+                            <Grid Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0" x:Name="PreConnectBox"
+                                         FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"
+                                         Padding="6,4"/>
+                                <Button Grid.Column="1" Content="{Binding [BtnBrowse], Source={x:Static local:Lang.Instance}}"
+                                        Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,4"
+                                        Margin="4,0,0,0" Click="BrowsePreConnect_Click"/>
+                                <ToggleButton Grid.Column="2" x:Name="PreConnectEmbed"
+                                              Content="{Binding [BtnEmbed], Source={x:Static local:Lang.Instance}}"
+                                              FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"
+                                              Padding="10,4" Margin="4,0,0,0"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              Width="Auto" Height="Auto"
+                                              Checked="EmbedToggle_Changed" Unchecked="EmbedToggle_Changed"
+                                              Tag="PreConnect"/>
+                            </Grid>
+                            <TextBox x:Name="PreConnectEmbedBox"
+                                     FontFamily="Consolas" FontSize="10"
+                                     AcceptsReturn="True" AcceptsTab="True"
+                                     VerticalScrollBarVisibility="Auto" Height="80"
+                                     Visibility="Collapsed" Margin="0,0,0,14"/>
+
+                            <!-- Post-connect -->
+                            <TextBlock Text="{Binding [TunnelScriptPostConnect], Source={x:Static local:Lang.Instance}}"
+                                       FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"
+                                       FontWeight="Bold" Foreground="{DynamicResource TextPrimary}"
+                                       Margin="0,0,0,4"/>
+                            <Grid Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0" x:Name="PostConnectBox"
+                                         FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"
+                                         Padding="6,4"/>
+                                <Button Grid.Column="1" Content="{Binding [BtnBrowse], Source={x:Static local:Lang.Instance}}"
+                                        Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,4"
+                                        Margin="4,0,0,0" Click="BrowsePostConnect_Click"/>
+                                <ToggleButton Grid.Column="2" x:Name="PostConnectEmbed"
+                                              Content="{Binding [BtnEmbed], Source={x:Static local:Lang.Instance}}"
+                                              FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"
+                                              Padding="10,4" Margin="4,0,0,0"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              Width="Auto" Height="Auto"
+                                              Checked="EmbedToggle_Changed" Unchecked="EmbedToggle_Changed"
+                                              Tag="PostConnect"/>
+                            </Grid>
+                            <TextBox x:Name="PostConnectEmbedBox"
+                                     FontFamily="Consolas" FontSize="10"
+                                     AcceptsReturn="True" AcceptsTab="True"
+                                     VerticalScrollBarVisibility="Auto" Height="80"
+                                     Visibility="Collapsed" Margin="0,0,0,14"/>
+
+                            <!-- Pre-disconnect -->
+                            <TextBlock Text="{Binding [TunnelScriptPreDisconnect], Source={x:Static local:Lang.Instance}}"
+                                       FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"
+                                       FontWeight="Bold" Foreground="{DynamicResource TextPrimary}"
+                                       Margin="0,0,0,4"/>
+                            <Grid Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0" x:Name="PreDisconnectBox"
+                                         FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"
+                                         Padding="6,4"/>
+                                <Button Grid.Column="1" Content="{Binding [BtnBrowse], Source={x:Static local:Lang.Instance}}"
+                                        Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,4"
+                                        Margin="4,0,0,0" Click="BrowsePreDisconnect_Click"/>
+                                <ToggleButton Grid.Column="2" x:Name="PreDisconnectEmbed"
+                                              Content="{Binding [BtnEmbed], Source={x:Static local:Lang.Instance}}"
+                                              FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"
+                                              Padding="10,4" Margin="4,0,0,0"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              Width="Auto" Height="Auto"
+                                              Checked="EmbedToggle_Changed" Unchecked="EmbedToggle_Changed"
+                                              Tag="PreDisconnect"/>
+                            </Grid>
+                            <TextBox x:Name="PreDisconnectEmbedBox"
+                                     FontFamily="Consolas" FontSize="10"
+                                     AcceptsReturn="True" AcceptsTab="True"
+                                     VerticalScrollBarVisibility="Auto" Height="80"
+                                     Visibility="Collapsed" Margin="0,0,0,14"/>
+
+                            <!-- Post-disconnect -->
+                            <TextBlock Text="{Binding [TunnelScriptPostDisconnect], Source={x:Static local:Lang.Instance}}"
+                                       FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"
+                                       FontWeight="Bold" Foreground="{DynamicResource TextPrimary}"
+                                       Margin="0,0,0,4"/>
+                            <Grid Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0" x:Name="PostDisconnectBox"
+                                         FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"
+                                         Padding="6,4"/>
+                                <Button Grid.Column="1" Content="{Binding [BtnBrowse], Source={x:Static local:Lang.Instance}}"
+                                        Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,4"
+                                        Margin="4,0,0,0" Click="BrowsePostDisconnect_Click"/>
+                                <ToggleButton Grid.Column="2" x:Name="PostDisconnectEmbed"
+                                              Content="{Binding [BtnEmbed], Source={x:Static local:Lang.Instance}}"
+                                              FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"
+                                              Padding="10,4" Margin="4,0,0,0"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              Width="Auto" Height="Auto"
+                                              Checked="EmbedToggle_Changed" Unchecked="EmbedToggle_Changed"
+                                              Tag="PostDisconnect"/>
+                            </Grid>
+                            <TextBox x:Name="PostDisconnectEmbedBox"
+                                     FontFamily="Consolas" FontSize="10"
+                                     AcceptsReturn="True" AcceptsTab="True"
+                                     VerticalScrollBarVisibility="Auto" Height="80"
+                                     Visibility="Collapsed" Margin="0,0,0,8"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
             </TabControl>
 
             <!-- Button bar -->
-            <Border Grid.Row="3" Background="{StaticResource Panel}" CornerRadius="0,0,6,6">
+            <Border Grid.Row="3" Background="{DynamicResource Surface}" CornerRadius="{DynamicResource Theme.CornerRadiusBottom}">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
                             VerticalAlignment="Center" Margin="0,0,16,0">
                     <Button Content="{Binding [BtnCancel], Source={x:Static local:Lang.Instance}}"

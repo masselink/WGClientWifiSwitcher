@@ -28,16 +28,39 @@ namespace MasselGUARD
     {
         private string _ssid   = "";
         private string _tunnel = "";
+        private string _networkType = "wifi";
+        private string _adapterFilter = "";
 
         public string Ssid   { get => _ssid;   set { _ssid   = value; OnProp(); } }
         public string Tunnel { get => _tunnel; set { _tunnel = value; OnProp(); OnProp(nameof(TunnelDisplay)); } }
 
+        /// <summary>"wifi" | "ethernet" | "vpn" | "any"</summary>
+        public string NetworkType
+        {
+            get => _networkType;
+            set { _networkType = value; OnProp(); OnProp(nameof(NetworkTypeDisplay)); }
+        }
+
+        /// <summary>Optional partial adapter name filter (case-insensitive). Empty = match any adapter of NetworkType.</summary>
+        public string AdapterFilter
+        {
+            get => _adapterFilter;
+            set { _adapterFilter = value; OnProp(); }
+        }
+
         [JsonIgnore] public string TunnelDisplay => string.IsNullOrEmpty(_tunnel) ? "\u2014 disconnect" : _tunnel;
+        [JsonIgnore] public string NetworkTypeDisplay => _networkType switch
+        {
+            "ethernet" => "Ethernet",
+            "vpn"      => "VPN",
+            "any"      => "Any",
+            _          => "WiFi",
+        };
         [JsonIgnore] public string StatusText { get; set; } = "\u2014";
         [JsonIgnore] public SolidColorBrush StatusColor =>
             StatusText == "\u25cf active"
-                ? new SolidColorBrush(Color.FromRgb(63, 185, 80))
-                : new SolidColorBrush(Color.FromRgb(139, 148, 158));
+                ? ThemeRes.Success
+                : ThemeRes.TextMuted;
 
         public event PropertyChangedEventHandler? PropertyChanged;
         private void OnProp([CallerMemberName] string? n = null)
@@ -54,6 +77,10 @@ namespace MasselGUARD
 
         public string     Name   { get; set; } = "";
         public TunnelType Type   { get; set; } = TunnelType.Local;
+        /// <summary>Group this tunnel belongs to. Empty string = ungrouped.</summary>
+        public string     Group  { get; set; } = "";
+        /// <summary>User notes — shown as tooltip on the tunnel name.</summary>
+        public string     Notes  { get; set; } = "";
 
         public bool Active
         {
@@ -76,16 +103,12 @@ namespace MasselGUARD
                           Lang.T("TunnelStatusDisconnected");
 
         public System.Windows.Media.SolidColorBrush StatusColor =>
-            !_available
-                ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(247, 129, 102)) // red/warn
-                : _active
-                    ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(63, 185, 80))
-                    : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(139, 148, 158));
+            !_available ? ThemeRes.Danger
+            : _active   ? ThemeRes.Success
+                        : ThemeRes.TextMuted;
 
         public System.Windows.Media.SolidColorBrush NameColor =>
-            _available
-                ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(230, 237, 243))
-                : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(139, 148, 158));
+            _available ? ThemeRes.TextPrimary : ThemeRes.TextMuted;
 
         public System.Windows.TextDecorationCollection? NameDecoration =>
             _available ? null : System.Windows.TextDecorations.Strikethrough;
@@ -101,15 +124,16 @@ namespace MasselGUARD
             : Lang.T("TunnelTypeWireGuard");
 
         public System.Windows.Media.SolidColorBrush TypeColor =>
-            Type == TunnelType.Local
-                ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(88, 166, 255))
-                : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(139, 148, 158));
+            Type == TunnelType.Local ? ThemeRes.Accent : ThemeRes.TextMuted;
 
         public void RefreshLabels()
         {
             OnProp(nameof(StatusText));
             OnProp(nameof(ButtonLabel));
             OnProp(nameof(TypeLabel));
+            OnProp(nameof(NameColor));
+            OnProp(nameof(TypeColor));
+            OnProp(nameof(StatusColor));
         }
 
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
@@ -129,15 +153,47 @@ namespace MasselGUARD
         public class StoredTunnel
     {
         public string  Name   { get; set; } = "";
-        public string  Config { get; set; } = "";  // raw .conf text — used for locally created tunnels
-        public string  Source { get; set; } = "local"; // "local" or "wireguard"
-        public string? Path   { get; set; } = null;    // original file path — used for wireguard tunnels
+        public string  Config { get; set; } = "";
+        public string  Source { get; set; } = "local";
+        public string? Path   { get; set; } = null;
+        /// <summary>Group this tunnel belongs to. Empty = Ungrouped.</summary>
+        public string  Group  { get; set; } = "";
+        /// <summary>User notes — visible as a tooltip and in the metadata editor.</summary>
+        public string  Notes  { get; set; } = "";
+
+        public bool   KillSwitch           { get; set; } = false;
+        public int    RetryCount           { get; set; } = 0;
+        public int    RetryDelaySec        { get; set; } = 5;
+        public string PreConnectScript     { get; set; } = "";
+        public string PostConnectScript    { get; set; } = "";
+        public string PreDisconnectScript  { get; set; } = "";
+        public string PostDisconnectScript { get; set; } = "";
+    }
+
+    /// <summary>A named group that organises tunnels into collapsible sections.</summary>
+    public class TunnelGroup
+    {
+        public string Name        { get; set; } = "";
+        /// <summary>Whether the group is expanded in the tunnel list. Persisted.</summary>
+        public bool   IsExpanded  { get; set; } = true;
+        /// <summary>Optional accent colour override for this group header. Empty = use theme accent.</summary>
+        public string Color       { get; set; } = "";
+
+        public TunnelGroup() { }
+        public TunnelGroup(string name) { Name = name; }
     }
 
     public class AppConfig
     {
         public List<TunnelRule>   Rules              { get; set; } = new();
         public List<StoredTunnel> Tunnels            { get; set; } = new();
+        /// <summary>User-defined tunnel groups. Order is preserved in the UI.</summary>
+        public List<TunnelGroup>  TunnelGroups       { get; set; } = new()
+        {
+            new TunnelGroup("Work"),
+            new TunnelGroup("Personal"),
+            new TunnelGroup("Travel"),
+        };
         public string             DefaultAction      { get; set; } = "none";
         public string             DefaultTunnel      { get; set; } = "";
         public string             InstallDirectory   { get; set; } = @"C:\Program Files\WireGuard";
@@ -158,6 +214,14 @@ namespace MasselGUARD
         // When true a small WPF popup appears near the tray when a tunnel
         // is connected or disconnected while the main window is hidden.
         public bool               ShowTrayPopupOnSwitch        { get; set; } = true;
+
+        // Active theme folder name (maps to theme/<ActiveTheme>/theme.json)
+        public string             ActiveTheme                  { get; set; } = "default-dark";
+        // Separate dark/light theme selections for auto-switching
+        public string             ActiveDarkTheme              { get; set; } = "default-dark";
+        public string             ActiveLightTheme             { get; set; } = "default-light";
+        // When true, automatically switch between dark/light based on Windows system preference
+        public bool               AutoTheme                    { get; set; } = false;
 
         // ── App mode (replaces the old EnableLocalTunnels boolean) ───────────
         public AppMode Mode { get; set; } = AppMode.Standalone;
@@ -217,6 +281,89 @@ namespace MasselGUARD
             }
             catch { return "en"; }
         }
+
+        public static string LoadTheme()
+        {
+            try
+            {
+                if (!File.Exists(ConfigPath)) return "default-dark";
+                var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                var cfg  = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath), opts);
+                return string.IsNullOrWhiteSpace(cfg?.ActiveTheme) ? "default-dark" : cfg.ActiveTheme;
+            }
+            catch { return "default-dark"; }
+        }
+
+        public static bool LoadAutoTheme()
+        {
+            try
+            {
+                if (!File.Exists(ConfigPath)) return false;
+                var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                var cfg  = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath), opts);
+                return cfg?.AutoTheme ?? false;
+            }
+            catch { return false; }
+        }
+
+        public static void SaveTheme(string themeName)
+        {
+            try
+            {
+                AppConfig cfg = new();
+                if (File.Exists(ConfigPath))
+                {
+                    var opts2 = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                    cfg = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath), opts2) ?? new AppConfig();
+                }
+                cfg.ActiveTheme = themeName;
+                Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
+                File.WriteAllText(ConfigPath,
+                    JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true }));
+            }
+            catch { }
+        }
+
+        public static void SaveThemeConfig(string activeTheme, string darkTheme, string lightTheme, bool autoTheme)
+        {
+            try
+            {
+                AppConfig cfg = new();
+                if (File.Exists(ConfigPath))
+                {
+                    var opts2 = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                    cfg = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath), opts2) ?? new AppConfig();
+                }
+                cfg.ActiveTheme      = activeTheme;
+                cfg.ActiveDarkTheme  = darkTheme;
+                cfg.ActiveLightTheme = lightTheme;
+                cfg.AutoTheme        = autoTheme;
+                Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
+                File.WriteAllText(ConfigPath,
+                    JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true }));
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>
+    /// Thin helper for reading theme brush resources from code-behind.
+    /// Returns a fallback colour if the resource key is missing (e.g. at design time).
+    /// </summary>
+    internal static class ThemeRes
+    {
+        private static SolidColorBrush Get(string key, Color fallback)
+        {
+            if (Application.Current?.Resources[key] is SolidColorBrush b) return b;
+            return new SolidColorBrush(fallback);
+        }
+
+        public static SolidColorBrush Accent      => Get("Accent",      Color.FromRgb(88,  166, 255));
+        public static SolidColorBrush Success     => Get("Success",     Color.FromRgb(63,  185,  80));
+        public static SolidColorBrush Danger      => Get("Danger",      Color.FromRgb(247, 129, 102));
+        public static SolidColorBrush TextPrimary => Get("TextPrimary", Color.FromRgb(230, 237, 243));
+        public static SolidColorBrush TextMuted   => Get("TextMuted",   Color.FromRgb(139, 148, 158));
+        public static SolidColorBrush Border      => Get("BorderColor", Color.FromRgb(48,   54,  61));
     }
 
     public partial class MainWindow : Window
@@ -227,9 +374,11 @@ namespace MasselGUARD
 
         private static AppConfig _cfg = new();
         private static bool _firstRun = false;   // set by LoadConfig when no config file exists
+        private bool _startupComplete = false;   // suppress verbose discovery log after startup
         private readonly ObservableCollection<TunnelRule>  _rules   = new();
         private readonly ObservableCollection<TunnelEntry> _tunnels = new();
         private string? _lastWifi;
+        private TunnelEntry? _selectedTunnel;      // tracks selection across grouped panel
         private readonly DispatcherTimer _timer = new();
         private Ringlogger?              _ringlogger;
         private string                   _ringloggerTunnel = "";
@@ -427,7 +576,6 @@ namespace MasselGUARD
         {
             InitializeComponent();
             RulesListView.ItemsSource  = _rules;
-            TunnelsListView.ItemsSource = _tunnels;
 
             System.Windows.Application.Current.DispatcherUnhandledException += (s, e) =>
             {
@@ -449,10 +597,16 @@ namespace MasselGUARD
 
                 UpdateAdminLabel();
                 UpdateFooterLabel();
-                var startedFrom = Environment.ProcessPath
-                    ?? AppContext.BaseDirectory;
-                Log("LogStartedFrom", LogLevel.Info, startedFrom);
-                Log("LogAppStarted", LogLevel.Info);
+                ShowRightTab("Log");    // initialise right panel — Log is default
+                var startedFrom = Environment.ProcessPath ?? AppContext.BaseDirectory;
+
+                // Startup summary — always logged at Info so it appears at default level
+                Log("LogAppStarted", LogLevel.Ok);
+                LogRaw($"Started from: {startedFrom}", LogLevel.Info);
+                LogRaw($"  [DBG] OS       : {Environment.OSVersion}", LogLevel.Debug);
+                LogRaw($"  [DBG] .NET     : {Environment.Version}", LogLevel.Debug);
+                LogRaw($"  [DBG] Platform : {Environment.OSVersion.Platform} x{(Environment.Is64BitProcess ? "64" : "32")}", LogLevel.Debug);
+                LogRaw($"  [DBG] User     : {Environment.UserDomainName}\\{Environment.UserName}", LogLevel.Debug);
                 LoadConfig();
                 // Log any orphaned services found at startup
                 Dispatcher.BeginInvoke(
@@ -468,12 +622,29 @@ namespace MasselGUARD
                 ApplyManualMode();
                 ApplyLocalTunnelMode();
                 SetupTimer();
+                _startupComplete = true;   // subsequent RefreshTunnelDropdowns won't log discovery
+
+                // (Local tunnels use wireguard.exe /installtunnelservice — no DLLs needed)
+
+                // Sync auto theme on startup — apply correct dark/light if auto is enabled
+                if (_cfg.AutoTheme)
+                {
+                    bool isDark = ThemeManager.GetSystemIsDark();
+                    var target = isDark ? _cfg.ActiveDarkTheme : _cfg.ActiveLightTheme;
+                    if (!string.IsNullOrEmpty(target) && target != ThemeManager.Instance.CurrentThemeName)
+                    {
+                        ThemeManager.Instance.Load(target);
+                        _cfg.ActiveTheme = target;
+                    }
+                }
+                Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
+                    () => UpdateThemeToggleIcon());
 
                 // (Local tunnels use wireguard.exe /installtunnelservice — no DLLs needed)
 
                 // Background update check — once every 7 days
                 if ((DateTime.UtcNow - _cfg.LastUpdateCheck).TotalDays >= 7)
-                    _ = UpdateChecker.CheckAsync(_cfg, SaveConfig, Dispatcher);
+                    _ = UpdateChecker.CheckAsync(_cfg, () => SaveConfig(), Dispatcher);
 
                 // First run: show setup wizard if no config file existed before LoadConfig()
                 if (_firstRun)
@@ -497,7 +668,7 @@ namespace MasselGUARD
                     if (suppress)
                     {
                         _cfg.SuppressPortableUpdatePrompt = true;
-                        SaveConfig();
+                        SaveConfig("Suppressed portable update prompt");
                     }
                     if (result == MessageBoxResult.Yes)
                         RunUpdate();
@@ -642,7 +813,19 @@ namespace MasselGUARD
             UpdateStatusDisplay(wifi);
             if (wifi == _lastWifi) return;
             _lastWifi = wifi;
-            Log("LogWifiChanged", LogLevel.Info, wifi ?? Lang.T("LogWifiDisconnected"));
+
+            if (wifi != null)
+            {
+                bool isOpen = IsOpenNetwork();
+                // Info level: SSID + security status
+                LogRaw($"WiFi: {wifi}{(isOpen ? "  ⚠ open (no password)" : "  🔒 secured")}", LogLevel.Info);
+                LogRaw($"  [DBG] Network type: {(isOpen ? "Open / no security" : "WPA/WPA2/WPA3 secured")}", LogLevel.Debug);
+            }
+            else
+            {
+                LogRaw("WiFi: disconnected", LogLevel.Info);
+            }
+
             if (!_cfg.ManualMode)
                 ApplyRules(wifi);
         }
@@ -652,8 +835,8 @@ namespace MasselGUARD
             wifi ??= GetCurrentSsid();
             WifiLabel.Text       = wifi ?? Lang.T("StatusNone");
             WifiLabel.Foreground = wifi != null
-                ? (SolidColorBrush)FindResource("Text")
-                : (SolidColorBrush)FindResource("Sub");
+                ? (SolidColorBrush)FindResource("TextPrimary")
+                : (SolidColorBrush)FindResource("TextMuted");
 
             foreach (var rule in _rules)
                 rule.StatusText = (!string.IsNullOrEmpty(rule.Tunnel) && GetTunnelStatus(rule.Tunnel))
@@ -662,8 +845,8 @@ namespace MasselGUARD
             var active = GetActiveTunnelNames();
             TunnelLabel.Text       = active.Count > 0 ? string.Join(", ", active) : "\u2014";
             TunnelLabel.Foreground = active.Count > 0
-                ? (SolidColorBrush)FindResource("Green")
-                : (SolidColorBrush)FindResource("Sub");
+                ? (SolidColorBrush)FindResource("Success")
+                : (SolidColorBrush)FindResource("TextMuted");
 
             ((App)System.Windows.Application.Current).UpdateTrayStatus(TunnelLabel.Text, active.Count > 0);
             RefreshTunnelEntryStatuses();
@@ -809,6 +992,7 @@ namespace MasselGUARD
 
             foreach (var name in GetActiveTunnelNames().Where(n => n != target))
             {
+                LogRaw($"  [DBG] Stopping conflicting tunnel: {name}", LogLevel.Debug);
                 StopTunnel(name);
                 Log("LogStoppedTunnel", LogLevel.Warn, name, Lang.T("LogStoppedTunnelOk"));
             }
@@ -819,10 +1003,21 @@ namespace MasselGUARD
                 return;
             }
 
+            if (reason != null)
+                LogRaw($"Trigger: {reason}", LogLevel.Info);
+
             LastError = "";
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             bool ok = StartTunnel(target);
-            Log("LogStartedTunnel", ok ? LogLevel.Ok : LogLevel.Warn, target, ok ? Lang.T("LogTunnelOk") : Lang.T("LogTunnelFailed"));
-            if (!ok && !string.IsNullOrEmpty(LastError)) LogRaw("  " + LastError, LogLevel.Warn);
+            sw.Stop();
+
+            Log("LogStartedTunnel", ok ? LogLevel.Ok : LogLevel.Warn, target,
+                ok ? Lang.T("LogTunnelOk") : Lang.T("LogTunnelFailed"));
+            if (ok)
+                LogRaw($"  [DBG] Connected in {sw.ElapsedMilliseconds} ms", LogLevel.Debug);
+            else if (!string.IsNullOrEmpty(LastError))
+                LogRaw("  " + LastError, LogLevel.Warn);
+
             if (reason != null)
                 ShowTrayPopup(ok
                     ? Lang.T("TrayPopupConnectedReason",  target, reason)
@@ -833,11 +1028,142 @@ namespace MasselGUARD
                     : Lang.T("TrayPopupConnecting", target));
         }
 
-        // ── WireGuard helpers ────────────────────────────────────────────────
+        // ── Script execution ──────────────────────────────────────────────────
+        private const string ScriptEmbedPrefix = "@embed:";
+
+        /// <summary>
+        /// Runs a script hook. Value can be:
+        ///   - Empty/null   → nothing
+        ///   - "@embed:..." → inline content, written to a temp file and executed
+        ///   - "*.ps1"      → powershell.exe -ExecutionPolicy Bypass -File &lt;path&gt;
+        ///   - "*.bat"      → cmd.exe /c &lt;path&gt;
+        /// Returns true if no script configured OR if the script exits 0.
+        /// </summary>
+        private bool RunTunnelScript(string? value, string hook, string tunnelName)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return true;
+
+            string scriptPath;
+            bool   isTempFile = false;
+
+            if (value.StartsWith(ScriptEmbedPrefix, StringComparison.Ordinal))
+            {
+                // Inline/embedded script — write to temp file
+                var content = value[ScriptEmbedPrefix.Length..];
+                var ext     = content.TrimStart().StartsWith("#!", StringComparison.Ordinal) ? ".sh"
+                            : content.Contains("powershell", StringComparison.OrdinalIgnoreCase) ? ".ps1"
+                            : ".bat";
+                scriptPath  = Path.Combine(Path.GetTempPath(), $"masselguard_{hook}_{tunnelName}{ext}");
+                File.WriteAllText(scriptPath, content, System.Text.Encoding.UTF8);
+                isTempFile = true;
+                LogRaw($"  [Script] Running embedded {hook} script for {tunnelName}", LogLevel.Info);
+            }
+            else
+            {
+                scriptPath = value;
+                if (!File.Exists(scriptPath))
+                {
+                    LogRaw($"  [Script] {hook} script not found: {scriptPath}", LogLevel.Warn);
+                    return false;
+                }
+                LogRaw($"  [Script] Running {hook}: {Path.GetFileName(scriptPath)}", LogLevel.Info);
+            }
+
+            try
+            {
+                var ext = Path.GetExtension(scriptPath).ToLowerInvariant();
+                string exe, args;
+                if (ext == ".ps1")
+                {
+                    exe  = "powershell.exe";
+                    args = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{scriptPath}\"";
+                }
+                else
+                {
+                    exe  = "cmd.exe";
+                    args = $"/c \"{scriptPath}\"";
+                }
+
+                var psi = new ProcessStartInfo(exe, args)
+                {
+                    UseShellExecute        = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError  = true,
+                    CreateNoWindow         = true,
+                };
+                using var proc = Process.Start(psi)!;
+                string stdout = proc.StandardOutput.ReadToEnd().Trim();
+                string stderr = proc.StandardError.ReadToEnd().Trim();
+                proc.WaitForExit(30_000);
+
+                if (!string.IsNullOrEmpty(stdout))
+                    LogRaw($"  [Script] {stdout}", LogLevel.Debug);
+                if (!string.IsNullOrEmpty(stderr))
+                    LogRaw($"  [Script] stderr: {stderr}", LogLevel.Warn);
+
+                bool ok = proc.ExitCode == 0;
+                LogRaw($"  [Script] {hook} exit {proc.ExitCode}{(ok ? "" : " (non-zero)")}", ok ? LogLevel.Info : LogLevel.Warn);
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                LogRaw($"  [Script] {hook} error: {ex.Message}", LogLevel.Warn);
+                return false;
+            }
+            finally
+            {
+                if (isTempFile) try { File.Delete(scriptPath); } catch { }
+            }
+        }
 
         private static string SvcName(string t) => "WireGuardTunnel$" + t;
 
         internal static string LastError = "";
+
+        /// <summary>Parses a WireGuard .conf text and returns key fields for debug logging.</summary>
+        private static Dictionary<string, string> ParseTunnelConf(string conf)
+        {
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var rawLine in conf.Split('\n'))
+            {
+                var line = rawLine.Trim();
+                if (line.StartsWith('#') || !line.Contains('=')) continue;
+                var eq  = line.IndexOf('=');
+                var key = line[..eq].Trim();
+                var val = line[(eq + 1)..].Trim();
+                // Keep first occurrence of each key
+                if (!result.ContainsKey(key)) result[key] = val;
+            }
+            return result;
+        }
+
+        /// <summary>Logs detailed conf fields at Debug level before/after connecting.</summary>
+        private void LogTunnelDebugInfo(string tunnel, string confText, bool connecting)
+        {
+            if (!ShouldLog(LogLevel.Debug)) return;
+            var fields = ParseTunnelConf(confText);
+
+            if (connecting)
+            {
+                LogRaw($"  [DBG] Connecting: {tunnel}", LogLevel.Debug);
+                if (fields.TryGetValue("Address",    out var addr))
+                    LogRaw($"  [DBG]   Interface address : {addr}",      LogLevel.Debug);
+                if (fields.TryGetValue("DNS",        out var dns))
+                    LogRaw($"  [DBG]   DNS               : {dns}",       LogLevel.Debug);
+                if (fields.TryGetValue("Endpoint",   out var ep))
+                    LogRaw($"  [DBG]   Endpoint          : {ep}",        LogLevel.Debug);
+                if (fields.TryGetValue("AllowedIPs", out var allowed))
+                    LogRaw($"  [DBG]   AllowedIPs        : {allowed}",   LogLevel.Debug);
+                if (fields.TryGetValue("PublicKey",  out var pk))
+                    LogRaw($"  [DBG]   Peer public key   : {pk[..Math.Min(12, pk.Length)]}...", LogLevel.Debug);
+                if (fields.TryGetValue("MTU",        out var mtu))
+                    LogRaw($"  [DBG]   MTU               : {mtu}",       LogLevel.Debug);
+            }
+            else
+            {
+                LogRaw($"  [DBG] Disconnected: {tunnel}", LogLevel.Debug);
+            }
+        }
 
         // Ensure WireGuardManager (the WireGuard system service) is running.
         private static void EnsureManagerRunning()
@@ -860,6 +1186,10 @@ namespace MasselGUARD
             LastError = "";
             var stored = _cfg.Tunnels.FirstOrDefault(t =>
                 string.Equals(t.Name, tunnel, StringComparison.OrdinalIgnoreCase));
+
+            // ── Pre-connect script (runs for all tunnel types) ────────────────
+            if (!string.IsNullOrEmpty(stored?.PreConnectScript))
+                RunTunnelScript(stored.PreConnectScript, "pre-connect", tunnel);
 
             // ── Local tunnel — tunnel.dll + wireguard.dll ─────────────────────
             if (stored?.Source == "local")
@@ -900,18 +1230,19 @@ namespace MasselGUARD
                     EnsureTunnelsDirExists();
                     File.WriteAllBytes(confPath, DpapiEncrypt(recovered));
                     if (stored2 != null) { stored2.Path = confPath; stored2.Config = ""; }
-                    SaveConfig();
+                    SaveConfig("Tunnel config recovered");
                     LogRaw($"Migrated '{tunnel}' → {confPath} (DPAPI)", LogLevel.Info);
                 }
 
                 // Decrypt .conf.dpapi → write BOM-free plaintext to SvcTempDir
-                // using atomic FileSecurity creation so the file is locked to
-                // SYSTEM + Administrators + current user from the very first byte
-                // written — no window where inherited permissions apply.
                 EnsureTunnelsDirExists();
                 string svcConf   = SvcConfPath(tunnel);
                 string plaintext = DpapiDecrypt(File.ReadAllBytes(confPath));
                 WriteSecure(svcConf, plaintext);
+
+                // Debug: log conf fields before connecting
+                LogTunnelDebugInfo(tunnel, plaintext, connecting: true);
+                LogRaw($"  [DBG] Service conf : {svcConf}", LogLevel.Debug);
 
                 bool ok = TunnelDll.Connect(tunnel, svcConf,
                     msg => LogRaw(msg, LogLevel.Debug), out var err);
@@ -921,12 +1252,19 @@ namespace MasselGUARD
                 // no longer needs the file on disk.
                 try { File.Delete(svcConf); } catch { }
 
-                if (!ok) LastError = err;
-                return ok;
+                if (!ok) { LastError = err; return false; }
+
+                // ── Post-connect script ───────────────────────────────────────
+                if (!string.IsNullOrEmpty(stored?.PostConnectScript))
+                    RunTunnelScript(stored.PostConnectScript, "post-connect", tunnel);
+
+                return true;
             }
 
             // ── WireGuard GUI tunnel ──────────────────────────────────────────
             EnsureManagerRunning();
+            LogRaw($"  [DBG] Starting WG service: {SvcName(tunnel)}", LogLevel.Debug);
+            LogRaw($"  [DBG] WireGuard exe: {WgExe}", LogLevel.Debug);
 
             try
             {
@@ -934,6 +1272,8 @@ namespace MasselGUARD
                 if (svc.Status == ServiceControllerStatus.Running) return true;
                 svc.Start();
                 svc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
+                if (!string.IsNullOrEmpty(stored?.PostConnectScript))
+                    RunTunnelScript(stored.PostConnectScript, "post-connect", tunnel);
                 return true;
             }
             catch (Exception ex1)
@@ -965,24 +1305,44 @@ namespace MasselGUARD
             var stored = _cfg.Tunnels.FirstOrDefault(t =>
                 string.Equals(t.Name, tunnel, StringComparison.OrdinalIgnoreCase));
 
+            // ── Pre-disconnect script (all tunnel types) ──────────────────────
+            if (!string.IsNullOrEmpty(stored?.PreDisconnectScript))
+                RunTunnelScript(stored.PreDisconnectScript, "pre-disconnect", tunnel);
+
             // ── Local tunnel ──────────────────────────────────────────────────
             if (stored?.Source == "local")
             {
+                LogRaw($"  [DBG] Disconnect (local dll): {tunnel}", LogLevel.Debug);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
                 TunnelDll.Disconnect(tunnel, out var err);
+                sw.Stop();
                 if (!string.IsNullOrEmpty(err)) LastError = err;
-                // Temp conf was already deleted right after service creation;
-                // try again as a safety net in case an earlier run left one.
                 try { var f = SvcConfPath(tunnel); if (File.Exists(f)) File.Delete(f); } catch { }
+                LogRaw($"  [DBG] Disconnected in {sw.ElapsedMilliseconds} ms", LogLevel.Debug);
+
+                // ── Post-disconnect script ────────────────────────────────────
+                if (!string.IsNullOrEmpty(stored?.PostDisconnectScript))
+                    RunTunnelScript(stored.PostDisconnectScript, "post-disconnect", tunnel);
+
                 return true;
             }
 
             // ── WireGuard tunnel: use ServiceController ───────────────────────
+            LogRaw($"  [DBG] Stopping service: {SvcName(tunnel)}", LogLevel.Debug);
             try
             {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
                 using var svc = new ServiceController(SvcName(tunnel));
                 if (svc.Status == ServiceControllerStatus.Stopped) return true;
                 svc.Stop();
                 svc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15));
+                sw.Stop();
+                LogRaw($"  [DBG] Service stopped in {sw.ElapsedMilliseconds} ms", LogLevel.Debug);
+
+                // ── Post-disconnect script ────────────────────────────────────
+                if (!string.IsNullOrEmpty(stored?.PostDisconnectScript))
+                    RunTunnelScript(stored.PostDisconnectScript, "post-disconnect", tunnel);
+
                 return true;
             }
             catch (Exception ex)
@@ -1218,7 +1578,7 @@ namespace MasselGUARD
             }
         }
 
-        private void SaveConfig()
+        private void SaveConfig(string? changeDescription = null)
         {
             try
             {
@@ -1226,7 +1586,8 @@ namespace MasselGUARD
                 Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
                 File.WriteAllText(ConfigPath,
                     JsonSerializer.Serialize(_cfg, new JsonSerializerOptions { WriteIndented = true }));
-                Log("LogConfigSaved", LogLevel.Ok, _cfg.Rules.Count);
+                if (!string.IsNullOrEmpty(changeDescription))
+                    LogRaw($"Saved: {changeDescription}", LogLevel.Ok);
             }
             catch (Exception ex)
             {
@@ -1243,10 +1604,9 @@ namespace MasselGUARD
             if (dlg.ShowDialog() == true)
             {
                 _rules.Add(new TunnelRule { Ssid = dlg.ResultSsid, Tunnel = dlg.ResultTunnel });
-                SaveConfig();
+                var target = string.IsNullOrEmpty(dlg.ResultTunnel) ? Lang.T("TunnelBtnDisconnect") : dlg.ResultTunnel;
+                SaveConfig($"Rule added: {dlg.ResultSsid} → {target}");
                 UpdateCountBadges();
-                Log("LogRuleAdded", LogLevel.Ok, dlg.ResultSsid,
-                    string.IsNullOrEmpty(dlg.ResultTunnel) ? Lang.T("TunnelBtnDisconnect") : dlg.ResultTunnel);
             }
         }
 
@@ -1258,9 +1618,8 @@ namespace MasselGUARD
             {
                 rule.Ssid   = dlg.ResultSsid;
                 rule.Tunnel = dlg.ResultTunnel;
-                SaveConfig();
-                Log("LogRuleUpdated", LogLevel.Info, dlg.ResultSsid,
-                    string.IsNullOrEmpty(dlg.ResultTunnel) ? Lang.T("TunnelBtnDisconnect") : dlg.ResultTunnel);
+                var target = string.IsNullOrEmpty(dlg.ResultTunnel) ? Lang.T("TunnelBtnDisconnect") : dlg.ResultTunnel;
+                SaveConfig($"Rule updated: {dlg.ResultSsid} → {target}");
             }
         }
 
@@ -1273,9 +1632,8 @@ namespace MasselGUARD
                     MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
             {
                 _rules.Remove(rule);
-                SaveConfig();
+                SaveConfig($"Rule deleted: {rule.Ssid}");
                 UpdateCountBadges();
-                Log("LogRuleDeleted", LogLevel.Warn, rule.Ssid);
             }
         }
 
@@ -1507,7 +1865,9 @@ namespace MasselGUARD
         // ── Tunnel CRUD ───────────────────────────────────────────────────────
 
         private void SaveTunnelConfig(string name, string config,
-            string source = "local", string? filePath = null)
+            string source = "local", string? filePath = null, string group = "",
+            string preConnect = "", string postConnect = "",
+            string preDisconnect = "", string postDisconnect = "")
         {
             if (source == "local")
             {
@@ -1530,16 +1890,25 @@ namespace MasselGUARD
                 string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
             if (existing != null)
             {
-                existing.Config = config;
-                existing.Source = source;
-                existing.Path   = filePath;
+                existing.Config  = config;
+                existing.Source  = source;
+                existing.Path    = filePath;
+                existing.Group   = group;
+                existing.PreConnectScript     = preConnect;
+                existing.PostConnectScript    = postConnect;
+                existing.PreDisconnectScript  = preDisconnect;
+                existing.PostDisconnectScript = postDisconnect;
             }
             else
             {
                 _cfg.Tunnels.Add(new StoredTunnel
-                    { Name = name, Config = config, Source = source, Path = filePath });
+                {
+                    Name = name, Config = config, Source = source, Path = filePath, Group = group,
+                    PreConnectScript = preConnect, PostConnectScript = postConnect,
+                    PreDisconnectScript = preDisconnect, PostDisconnectScript = postDisconnect,
+                });
             }
-            SaveConfig();
+            SaveConfig($"Tunnel saved: {name}");
         }
 
         private string? LoadTunnelConfig(string name)
@@ -1580,13 +1949,19 @@ namespace MasselGUARD
         private void TunnelsListView_SelectionChanged(object sender,
             System.Windows.Controls.SelectionChangedEventArgs e)
         {
-            var entry    = TunnelsListView.SelectedItem as TunnelEntry;
+            // Sync _selectedTunnel from actual ListView selection when the user clicks a row
+            if (TunnelsListView.SelectedItem is TunnelEntry listSel)
+                _selectedTunnel = listSel;
+
+            var entry    = _selectedTunnel;
             bool sel     = entry != null;
             bool isLocal = entry?.Type == TunnelType.Local;
             bool isWg    = entry?.Type == TunnelType.WireGuard;
             bool avail   = entry?.IsAvailable ?? false;
 
-            EditTunnelBtn.IsEnabled = sel && isLocal;
+            // Edit enabled for both local and WireGuard tunnels — WG edit opens
+            // a metadata-only dialog (group, notes) since we don't own the conf file
+            EditTunnelBtn.IsEnabled = sel;
 
             // The action button morphs based on the selected tunnel type/state:
             //  • WireGuard-linked  → "Unlink"  (removes from list, keeps WG conf)
@@ -1621,23 +1996,73 @@ namespace MasselGUARD
         {
             var dlg = new Views.TunnelConfigDialog { Owner = this };
             if (dlg.ShowDialog() != true) return;
-            SaveTunnelConfig(dlg.ResultName!, dlg.ResultConfig!);
+            SaveTunnelConfig(dlg.ResultName!, dlg.ResultConfig!, group: dlg.ResultGroup,
+                preConnect: dlg.ResultPreConnectScript, postConnect: dlg.ResultPostConnectScript,
+                preDisconnect: dlg.ResultPreDisconnectScript, postDisconnect: dlg.ResultPostDisconnectScript);
             Log("TunnelSavedLog", LogLevel.Ok, dlg.ResultName!);
             RefreshTunnelDropdowns();
         }
 
         private void EditTunnel_Click(object sender, RoutedEventArgs e)
         {
-            if (TunnelsListView.SelectedItem is not TunnelEntry entry) return;
-            var config = LoadTunnelConfig(entry.Name);
-            var dlg    = new Views.TunnelConfigDialog(entry.Name, config) { Owner = this };
+            if (_selectedTunnel is not TunnelEntry entry) return;
+
+            var stored = _cfg.Tunnels.FirstOrDefault(t =>
+                string.Equals(t.Name, entry.Name, StringComparison.OrdinalIgnoreCase));
+
+            if (entry.Type == TunnelType.WireGuard)
+            {
+                // WireGuard-linked tunnels: metadata only (group + notes)
+                // We don't own the .conf file so we cannot edit connection params.
+                var mdlg = new Views.TunnelMetadataDialog(
+                    entry.Name,
+                    stored?.Group ?? "",
+                    stored?.Notes ?? "",
+                    _cfg.TunnelGroups.Select(g => g.Name).ToList(),
+                    stored?.PreConnectScript    ?? "",
+                    stored?.PostConnectScript   ?? "",
+                    stored?.PreDisconnectScript ?? "",
+                    stored?.PostDisconnectScript ?? "")
+                { Owner = this };
+
+                if (mdlg.ShowDialog() != true) return;
+
+                if (stored == null)
+                {
+                    stored = new StoredTunnel
+                        { Name = entry.Name, Source = "wireguard", Path = entry.Name };
+                    _cfg.Tunnels.Add(stored);
+                }
+                stored.Group                = mdlg.ResultGroup;
+                stored.Notes                = mdlg.ResultNotes;
+                stored.PreConnectScript     = mdlg.ResultPreConnectScript;
+                stored.PostConnectScript    = mdlg.ResultPostConnectScript;
+                stored.PreDisconnectScript  = mdlg.ResultPreDisconnectScript;
+                stored.PostDisconnectScript = mdlg.ResultPostDisconnectScript;
+                SaveConfig($"Tunnel metadata updated: {entry.Name}");
+                Log("TunnelSavedLog", LogLevel.Ok, entry.Name);
+                RefreshTunnelDropdowns();
+                return;
+            }
+
+            // Local tunnel — full editor
+            var config        = LoadTunnelConfig(entry.Name);
+            var existingGroup = stored?.Group ?? "";
+            var dlg = new Views.TunnelConfigDialog(
+                entry.Name, config, existingGroup,
+                stored?.PreConnectScript    ?? "",
+                stored?.PostConnectScript   ?? "",
+                stored?.PreDisconnectScript ?? "",
+                stored?.PostDisconnectScript ?? "")
+            { Owner = this };
             if (dlg.ShowDialog() != true) return;
 
-            // If name changed, delete old file
             if (!string.Equals(dlg.ResultName, entry.Name, StringComparison.OrdinalIgnoreCase))
                 DeleteTunnelConfig(entry.Name);
 
-            SaveTunnelConfig(dlg.ResultName!, dlg.ResultConfig!);
+            SaveTunnelConfig(dlg.ResultName!, dlg.ResultConfig!, group: dlg.ResultGroup,
+                preConnect: dlg.ResultPreConnectScript, postConnect: dlg.ResultPostConnectScript,
+                preDisconnect: dlg.ResultPreDisconnectScript, postDisconnect: dlg.ResultPostDisconnectScript);
             Log("TunnelSavedLog", LogLevel.Ok, dlg.ResultName!);
             RefreshTunnelDropdowns();
         }
@@ -1666,7 +2091,7 @@ namespace MasselGUARD
             // Remove from config only — do not delete the WireGuard app's file
             _cfg.Tunnels.RemoveAll(t =>
                 string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
-            SaveConfig();
+            SaveConfig($"Tunnel unlinked: {name}");
             Log("TunnelDeletedLog", LogLevel.Warn, name);
             RefreshTunnelDropdowns();
         }
@@ -1715,7 +2140,7 @@ namespace MasselGUARD
 
         private void DeleteTunnel_Click(object sender, RoutedEventArgs e)
         {
-            if (TunnelsListView.SelectedItem is not TunnelEntry entry) return;
+            if (_selectedTunnel is not TunnelEntry entry) return;
 
             if (entry.Type == TunnelType.WireGuard)
             {
@@ -1753,29 +2178,29 @@ namespace MasselGUARD
             RefreshTunnelDropdowns();
         }
 
-        private void AuthorLink_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
-        {
-            try { Process.Start(new ProcessStartInfo("https://github.com/masselink/MasselGUARD")
-                      { UseShellExecute = true }); }
-            catch { }
-        }
-
         private void DefaultAction_Changed(object sender, RoutedEventArgs e)
         {
             if (_loading) return;
             if      (ActionNone.IsChecked     == true) _cfg.DefaultAction = "none";
             else if (ActionDiscon.IsChecked   == true) _cfg.DefaultAction = "disconnect";
             else                                       _cfg.DefaultAction = "activate";
-            SaveConfig();
+            SaveConfig($"Default action: {_cfg.DefaultAction}");
         }
 
         private void RefreshTunnelDropdowns()
         {
             var tunnels = GetAvailableTunnels();
 
-            LogRaw(Lang.T("LogTunnelDiscovery", tunnels.Count) +
-                (tunnels.Count > 0 ? Lang.T("LogTunnelDiscoveryList", string.Join(", ", tunnels)) : "") +
-                Lang.T("LogInstallDir", _cfg.InstallDirectory ?? "none"), LogLevel.Info);
+            // Only log tunnel discovery at startup or when mode changes — not on every refresh
+            if (!_startupComplete)
+            {
+                LogRaw(Lang.T("LogTunnelDiscovery", tunnels.Count) +
+                    (tunnels.Count > 0 ? Lang.T("LogTunnelDiscoveryList", string.Join(", ", tunnels)) : "") +
+                    Lang.T("LogInstallDir", _cfg.InstallDirectory ?? "none"), LogLevel.Info);
+            }
+
+            // Preserve the currently selected tunnel name so we can restore it after rebuild
+            var selectedName = _selectedTunnel?.Name;
 
             // Update DefaultTunnelBox ComboBox
             var prev = DefaultTunnelBox.Text;
@@ -1783,7 +2208,7 @@ namespace MasselGUARD
             foreach (var t in tunnels) DefaultTunnelBox.Items.Add(t);
             DefaultTunnelBox.Text = prev;
 
-            // Rebuild tunnel panel list
+            // Rebuild tunnel entry list
             var active      = GetActiveTunnelNames();
             var wgInstalled = FindWireGuardExe() != null;
             _tunnels.Clear();
@@ -1797,20 +2222,18 @@ namespace MasselGUARD
                     Name               = t,
                     Active             = active.Contains(t),
                     Type               = isLocal ? TunnelType.Local : TunnelType.WireGuard,
-                    WireGuardInstalled = wgInstalled
+                    WireGuardInstalled = wgInstalled,
+                    Group              = stored?.Group ?? "",
+                    Notes              = stored?.Notes ?? "",
                 });
             }
 
             // Rebuild tray menu
             ((App)System.Windows.Application.Current).RebuildTrayTunnelMenu(tunnels, active);
 
-            // Update count badges
             TunnelCountLabel.Text = tunnels.Count.ToString();
-            RuleCountLabel.Text   = _rules.Count.ToString();
 
-            // Populate OpenWifi tunnel selector (— none — + all tunnels)
-            // Guard with _loading so the SelectionChanged handler does not
-            // overwrite _cfg.OpenWifiTunnel while we repopulate the list.
+            // Populate OpenWifi tunnel selector
             _loading = true;
             OpenWifiTunnelBox.Items.Clear();
             OpenWifiTunnelBox.Items.Add(Lang.T("OpenWifiNone"));
@@ -1820,15 +2243,17 @@ namespace MasselGUARD
             OpenWifiTunnelBox.SelectedItem = (object?)openMatch ?? Lang.T("OpenWifiNone");
             _loading = false;
 
-            // Check availability of all tunnels
+            // Check availability
             CheckTunnelAvailability();
             UpdateCountBadges();
+
+            // Rebuild the tab/ListView and restore selection by name
+            RebuildTunnelGroups(restoreSelection: selectedName);
         }
 
         private void UpdateCountBadges()
         {
             TunnelCountLabel.Text = _tunnels.Count.ToString();
-            RuleCountLabel.Text   = _rules.Count.ToString();
         }
 
         // Called from UpdateStatusDisplay to refresh live Active flags without rebuilding
@@ -1847,6 +2272,145 @@ namespace MasselGUARD
 
             ((App)System.Windows.Application.Current).RebuildTrayTunnelMenu(
                 _tunnels.Select(t => t.Name).ToList(), active);
+
+            // Do NOT call RebuildTunnelGroups here — TunnelEntry implements INPC so
+            // the ListView updates in-place. Rebuilding clears _selectedTunnel and
+            // replaces ItemsSource on every timer tick, causing laggy selection.
+        }
+
+        // ── Grouped tunnel panel ──────────────────────────────────────────────
+        // Builds the tab strip and filters TunnelsListView per active tab.
+        // Each section has a header row (▶/▼ + name + count) and a body
+        // containing one tunnel row per TunnelEntry in that group.
+        // ── Tab-based grouped tunnel view ─────────────────────────────────────
+        // Tracks which group tab is currently shown. "" = Uncategorized.
+        private string _activeGroupTab = "__ALL__";
+
+        private void RebuildTunnelGroups(string? restoreSelection = null)
+        {
+            // Build buckets: group name → entries
+            var configuredNames = _cfg.TunnelGroups
+                .Select(g => g.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var buckets = new Dictionary<string, List<TunnelEntry>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var g in _cfg.TunnelGroups)
+                buckets[g.Name] = new List<TunnelEntry>();
+            buckets["__UNCATEGORIZED__"] = new List<TunnelEntry>();
+
+            foreach (var t in _tunnels)
+            {
+                var key = !string.IsNullOrEmpty(t.Group) && configuredNames.Contains(t.Group)
+                    ? t.Group : "__UNCATEGORIZED__";
+                buckets[key].Add(t);
+            }
+
+            // Build tab strip
+            TunnelTabButtons.Children.Clear();
+
+            AddTabButton(Lang.T("TunnelTabAll"), "__ALL__", _tunnels.ToList(), buckets);
+
+            foreach (var g in _cfg.TunnelGroups)
+            {
+                var entries = buckets.TryGetValue(g.Name, out var b) ? b : new List<TunnelEntry>();
+                AddTabButton(g.Name, g.Name, entries, buckets);
+            }
+
+            var uncat = buckets["__UNCATEGORIZED__"];
+            AddTabButton(Lang.T("TunnelGroupUngrouped"), "__UNCATEGORIZED__", uncat, buckets);
+
+            // Make sure active tab still exists; fall back to All
+            bool tabExists = _activeGroupTab == "__ALL__" || _activeGroupTab == "__UNCATEGORIZED__" ||
+                             _cfg.TunnelGroups.Any(g => string.Equals(g.Name, _activeGroupTab,
+                                 StringComparison.OrdinalIgnoreCase));
+            if (!tabExists) _activeGroupTab = "__ALL__";
+
+            ApplyActiveTab(buckets, restoreSelection);
+        }
+
+        private void AddTabButton(string label, string key,
+            List<TunnelEntry> entries,
+            Dictionary<string, List<TunnelEntry>> buckets)
+        {
+            bool isActive = string.Equals(_activeGroupTab, key, StringComparison.OrdinalIgnoreCase);
+
+            var btn = new System.Windows.Controls.Button
+            {
+                Content         = $"{label} ({entries.Count})",
+                FontSize        = 9,
+                Padding         = new Thickness(8, 2, 8, 2),
+                BorderThickness = new Thickness(0, 0, 0, isActive ? 2 : 0),
+                BorderBrush     = isActive
+                    ? (System.Windows.Media.Brush)FindResource("Accent")
+                    : System.Windows.Media.Brushes.Transparent,
+                Background      = System.Windows.Media.Brushes.Transparent,
+                Foreground      = isActive
+                    ? (System.Windows.Media.Brush)FindResource("Accent")
+                    : (System.Windows.Media.Brush)FindResource("TextMuted"),
+                FontWeight      = isActive ? FontWeights.Bold : FontWeights.Normal,
+                Cursor          = System.Windows.Input.Cursors.Hand,
+            };
+
+            // Use a minimal no-hover-chrome style for tab buttons
+            btn.Style = (Style)FindResource("FlatBtn");
+            btn.Padding         = new Thickness(8, 2, 8, 2);   // override FlatBtn default
+            btn.BorderThickness = new Thickness(0, 0, 0, isActive ? 2 : 0);
+            btn.BorderBrush = isActive
+                ? (System.Windows.Media.Brush)FindResource("Accent")
+                : System.Windows.Media.Brushes.Transparent;
+
+            string capturedKey = key;
+            btn.Click += (_, _) =>
+            {
+                _activeGroupTab = capturedKey;
+                _selectedTunnel = null;
+                RebuildTunnelGroups();
+            };
+
+            TunnelTabButtons.Children.Add(btn);
+        }
+
+        private void ApplyActiveTab(Dictionary<string, List<TunnelEntry>> buckets,
+                                    string? restoreSelection = null)
+        {
+            List<TunnelEntry> visible;
+            if (_activeGroupTab == "__ALL__")
+                visible = _tunnels.ToList();
+            else if (buckets.TryGetValue(_activeGroupTab, out var b))
+                visible = b;
+            else
+                visible = new List<TunnelEntry>();
+
+            // Swap the ListView source in-place without touching _selectedTunnel
+            TunnelsListView.ItemsSource =
+                new System.Collections.ObjectModel.ObservableCollection<TunnelEntry>(visible);
+
+            // Restore selection by name after source swap
+            if (restoreSelection != null)
+            {
+                var match = visible.FirstOrDefault(e =>
+                    string.Equals(e.Name, restoreSelection, StringComparison.OrdinalIgnoreCase));
+                if (match != null)
+                {
+                    _selectedTunnel = match;
+                    TunnelsListView.SelectedItem = match;
+                }
+                else
+                {
+                    _selectedTunnel = null;
+                }
+            }
+
+            TunnelsListView_SelectionChanged(this, null!);
+        }
+
+        // Selection tracking for the grouped panel (kept for Edit/Delete toolbar sync)
+        private readonly Dictionary<TunnelEntry, System.Windows.Controls.Border> _tunnelRowBorders = new();
+
+        private void SelectTunnelEntry(TunnelEntry entry, System.Windows.Controls.Border? rowBorder = null)
+        {
+            _selectedTunnel = entry;
+            TunnelsListView_SelectionChanged(this, null!);
         }
 
         // Keeps a synthetic TunnelEntry for the active Quick Connect session
@@ -1894,7 +2458,7 @@ namespace MasselGUARD
             if (DefaultTunnelBox.SelectedItem is string s)
             {
                 _cfg.DefaultTunnel = s;
-                SaveConfig();
+                SaveConfig($"Default tunnel: {s}");
             }
         }
 
@@ -1902,7 +2466,7 @@ namespace MasselGUARD
         {
             if (_loading) return;
             _cfg.DefaultTunnel = DefaultTunnelBox.Text.Trim();
-            SaveConfig();
+            SaveConfig($"Default tunnel: {_cfg.DefaultTunnel}");
         }
 
         private void OpenWifiTunnel_Changed(object sender,
@@ -1912,23 +2476,31 @@ namespace MasselGUARD
             var sel = OpenWifiTunnelBox.SelectedItem as string ?? "";
             _cfg.OpenWifiTunnel = string.Equals(sel, Lang.T("OpenWifiNone"),
                 StringComparison.Ordinal) ? "" : sel;
-            SaveConfig();
+            SaveConfig(string.IsNullOrEmpty(_cfg.OpenWifiTunnel) ? "Open network protection: disabled" : $"Open network protection: {_cfg.OpenWifiTunnel}");
         }
 
         public void ManualStart(string tunnel)
         {
             Log("LogManualConnect", LogLevel.Info, tunnel);
             LastError = "";
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             bool ok = StartTunnel(tunnel);
-            Log("LogManualConnectResult", ok ? LogLevel.Ok : LogLevel.Warn, tunnel, ok ? Lang.T("TunnelStatusConnected") : Lang.T("LogTunnelFailed"));
+            sw.Stop();
+            Log("LogManualConnectResult", ok ? LogLevel.Ok : LogLevel.Warn, tunnel,
+                ok ? Lang.T("TunnelStatusConnected") : Lang.T("LogTunnelFailed"));
+            if (ok)  LogRaw($"  [DBG] Connected in {sw.ElapsedMilliseconds} ms", LogLevel.Debug);
             if (!ok && !string.IsNullOrEmpty(LastError)) LogRaw("  " + LastError, LogLevel.Warn);
         }
 
         public void ManualStop(string tunnel)
         {
             Log("LogManualDisconnect", LogLevel.Info, tunnel);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             bool ok = StopTunnel(tunnel);
-            Log("LogManualConnectResult", ok ? LogLevel.Ok : LogLevel.Warn, tunnel, ok ? Lang.T("TunnelStatusDisconnected") : Lang.T("LogTunnelFailed"));
+            sw.Stop();
+            Log("LogManualConnectResult", ok ? LogLevel.Ok : LogLevel.Warn, tunnel,
+                ok ? Lang.T("TunnelStatusDisconnected") : Lang.T("LogTunnelFailed"));
+            if (ok) LogRaw($"  [DBG] Disconnected in {sw.ElapsedMilliseconds} ms", LogLevel.Debug);
         }
 
         // ── Tunnel availability ────────────────────────────────────────────────
@@ -2067,22 +2639,22 @@ namespace MasselGUARD
             if (_cfg.ManualMode)
             {
                 FooterLabel.Text       = Lang.T("StatusManualMode");
-                FooterLabel.Foreground = (SolidColorBrush)FindResource("Sub");
+                FooterLabel.Foreground = (SolidColorBrush)FindResource("TextMuted");
             }
             else if (installed && runningFromInstall)
             {
                 FooterLabel.Text       = Lang.T("StatusManaged");
-                FooterLabel.Foreground = (SolidColorBrush)FindResource("Green");
+                FooterLabel.Foreground = (SolidColorBrush)FindResource("Success");
             }
             else if (installed && !runningFromInstall)
             {
                 FooterLabel.Text       = Lang.T("StatusManagedPortable");
-                FooterLabel.Foreground = (SolidColorBrush)FindResource("Sub");
+                FooterLabel.Foreground = (SolidColorBrush)FindResource("TextMuted");
             }
             else
             {
                 FooterLabel.Text       = Lang.T("StatusPortable");
-                FooterLabel.Foreground = (SolidColorBrush)FindResource("Sub");
+                FooterLabel.Foreground = (SolidColorBrush)FindResource("TextMuted");
             }
         }
 
@@ -2090,38 +2662,17 @@ namespace MasselGUARD
         internal void ApplyManualMode()
         {
             bool manual = _cfg.ManualMode;
-            RulesPanel.Visibility = manual ? Visibility.Collapsed : Visibility.Visible;
-            DefaultActionPanel.Visibility = Visibility.Visible;
 
-            // LeftTunnelGrid is named in XAML for reliable access
-            var leftGrid = LeftTunnelGrid as System.Windows.Controls.Grid;
-            if (leftGrid != null)
-            {
-                if (manual)
-                {
-                    // Collapse spacer + rules rows — tunnel list fills all remaining space.
-                    // Row 1 (tunnel list): take all available height (*)
-                    // Row 2 (toolbar):     Auto — stays anchored below list
-                    // Rows 3-6:            0 — rules section hidden
-                    leftGrid.RowDefinitions[1].Height = new System.Windows.GridLength(
-                        1, System.Windows.GridUnitType.Star);
-                    leftGrid.RowDefinitions[3].Height = new System.Windows.GridLength(0);
-                    for (int i = 4; i <= 6; i++)
-                        leftGrid.RowDefinitions[i].Height = new System.Windows.GridLength(0);
-                }
-                else
-                {
-                    // Restore original proportional heights
-                    leftGrid.RowDefinitions[1].Height = new System.Windows.GridLength(
-                        2, System.Windows.GridUnitType.Star);
-                    leftGrid.RowDefinitions[3].Height = new System.Windows.GridLength(10);
-                    for (int i = 4; i <= 6; i++)
-                        leftGrid.RowDefinitions[i].Height = System.Windows.GridLength.Auto;
-                    // Rules list (row 5) uses remaining star height
-                    leftGrid.RowDefinitions[5].Height = new System.Windows.GridLength(
-                        3, System.Windows.GridUnitType.Star);
-                }
-            }
+            // In manual mode hide the Rules and Default Action right-panel tabs;
+            // show them again when automation is re-enabled.
+            if (RTabBtnRules != null)
+                RTabBtnRules.Visibility   = manual ? Visibility.Collapsed : Visibility.Visible;
+            if (RTabBtnDefault != null)
+                RTabBtnDefault.Visibility = manual ? Visibility.Collapsed : Visibility.Visible;
+
+            // If the currently-active tab is now hidden, fall back to Log
+            if (manual && (_activeRightTab == "Rules" || _activeRightTab == "Default"))
+                ShowRightTab("Log");
 
             UpdateFooterLabel();
         }
@@ -2600,8 +3151,8 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
 
             var root = new System.Windows.Controls.Border
             {
-                Background      = Br("Bg"),
-                BorderBrush     = Br("Border"),
+                Background      = Br("WindowBg"),
+                BorderBrush     = Br("BorderColor"),
                 BorderThickness = new Thickness(1),
                 CornerRadius    = new CornerRadius(6)
             };
@@ -2614,7 +3165,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
             // ── Title bar ────────────────────────────────────────────────────
             var titleBar = new System.Windows.Controls.Border
             {
-                Background   = Br("Panel"),
+                Background   = Br("Surface"),
                 CornerRadius = new CornerRadius(6, 6, 0, 0)
             };
             var titleText = new System.Windows.Controls.TextBlock
@@ -2646,7 +3197,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
                 Text         = Lang.T("InstallLocationNote"),
                 FontFamily   = new System.Windows.Media.FontFamily("Consolas"),
                 FontSize     = 11,
-                Foreground   = Br("Sub"),
+                Foreground   = Br("TextMuted"),
                 TextWrapping = System.Windows.TextWrapping.Wrap,
                 Margin       = new Thickness(0, 0, 0, 16)
             });
@@ -2657,14 +3208,14 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
                 Text       = Lang.T("InstallLocationCurrent"),
                 FontFamily = new System.Windows.Media.FontFamily("Consolas"),
                 FontSize   = 10,
-                Foreground = Br("Sub"),
+                Foreground = Br("TextMuted"),
                 Margin     = new Thickness(0, 0, 0, 4)
             });
 
             var pathPreview = new System.Windows.Controls.Border
             {
-                Background      = Br("Card"),
-                BorderBrush     = Br("Border"),
+                Background      = Br("CardBg"),
+                BorderBrush     = Br("BorderColor"),
                 BorderThickness = new Thickness(1),
                 CornerRadius    = new CornerRadius(4),
                 Padding         = new Thickness(10, 7, 10, 7),
@@ -2675,7 +3226,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
                 Text         = Path.Combine(selectedParent, InstallFolderName),
                 FontFamily   = new System.Windows.Media.FontFamily("Consolas"),
                 FontSize     = 11,
-                Foreground   = Br("Text"),
+                Foreground   = Br("TextPrimary"),
                 TextWrapping = System.Windows.TextWrapping.Wrap
             };
             pathPreview.Child = pathText;
@@ -2711,7 +3262,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
             // ── Button bar ────────────────────────────────────────────────────
             var btnBar = new System.Windows.Controls.Border
             {
-                Background   = Br("Panel"),
+                Background   = Br("Surface"),
                 CornerRadius = new CornerRadius(0, 0, 6, 6)
             };
             var btnStack = new System.Windows.Controls.StackPanel
@@ -2776,8 +3327,8 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
 
             var root = new System.Windows.Controls.Border
             {
-                Background      = Br("Bg"),
-                BorderBrush     = Br("Border"),
+                Background      = Br("WindowBg"),
+                BorderBrush     = Br("BorderColor"),
                 BorderThickness = new Thickness(1),
                 CornerRadius    = new CornerRadius(6)
             };
@@ -2789,7 +3340,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
 
             // Title bar
             var titleBar = new System.Windows.Controls.Border
-                { Background = Br("Panel"), CornerRadius = new CornerRadius(6, 6, 0, 0) };
+                { Background = Br("Surface"), CornerRadius = new CornerRadius(6, 6, 0, 0) };
             var titleText = new System.Windows.Controls.TextBlock
             {
                 Text              = title,
@@ -2823,7 +3374,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
             {
                 Text         = message,
                 FontFamily   = new System.Windows.Media.FontFamily("Consolas"),
-                FontSize     = 11, Foreground = Br("Text"),
+                FontSize     = 11, Foreground = Br("TextPrimary"),
                 TextWrapping = System.Windows.TextWrapping.Wrap,
                 MaxWidth     = 380
             };
@@ -2837,7 +3388,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
                 Content     = Lang.T("DontAskAgainUpdate"),
                 FontFamily  = new System.Windows.Media.FontFamily("Consolas"),
                 FontSize    = 10,
-                Foreground  = Br("Sub"),
+                Foreground  = Br("TextMuted"),
                 Margin      = new Thickness(0, 12, 0, 0),
                 IsChecked   = false
             };
@@ -2848,7 +3399,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
 
             // Button bar
             var btnBar = new System.Windows.Controls.Border
-                { Background = Br("Panel"), CornerRadius = new CornerRadius(0, 0, 6, 6) };
+                { Background = Br("Surface"), CornerRadius = new CornerRadius(0, 0, 6, 6) };
             var btnStack = new System.Windows.Controls.StackPanel
             {
                 Orientation         = System.Windows.Controls.Orientation.Horizontal,
@@ -2898,10 +3449,10 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
             };
             var iconColor = icon switch
             {
-                MessageBoxImage.Error                             => "Red",
-                MessageBoxImage.Warning                           => "Red",
+                MessageBoxImage.Error                             => "Danger",
+                MessageBoxImage.Warning                           => "Danger",
                 MessageBoxImage.Question                          => "Accent",
-                _                                                 => "Sub"
+                _                                                 => "TextMuted"
             };
 
             var result = MessageBoxResult.None;
@@ -2920,8 +3471,8 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
 
             var root = new System.Windows.Controls.Border
             {
-                Background      = Br("Bg"),
-                BorderBrush     = Br("Border"),
+                Background      = Br("WindowBg"),
+                BorderBrush     = Br("BorderColor"),
                 BorderThickness = new Thickness(1),
                 CornerRadius    = new CornerRadius(6)
             };
@@ -2934,7 +3485,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
             // Title bar
             var titleBar = new System.Windows.Controls.Border
             {
-                Background   = Br("Panel"),
+                Background   = Br("Surface"),
                 CornerRadius = new CornerRadius(6, 6, 0, 0)
             };
             var titleText = new System.Windows.Controls.TextBlock
@@ -2975,7 +3526,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
                 Text              = message,
                 FontFamily        = new System.Windows.Media.FontFamily("Consolas"),
                 FontSize          = 11,
-                Foreground        = Br("Text"),
+                Foreground        = Br("TextPrimary"),
                 TextWrapping      = System.Windows.TextWrapping.Wrap,
                 VerticalAlignment = VerticalAlignment.Center,
                 MaxWidth          = 370
@@ -2987,7 +3538,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
             // Button bar
             var btnBar = new System.Windows.Controls.Border
             {
-                Background   = Br("Panel"),
+                Background   = Br("Surface"),
                 CornerRadius = new CornerRadius(0, 0, 6, 6)
             };
             var btnStack = new System.Windows.Controls.StackPanel
@@ -3083,11 +3634,11 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
                 }
 
                 // Frameless dark window matching app style
-                var bgBrush   = (SolidColorBrush)FindResource("Bg");
-                var panelBrush = (SolidColorBrush)FindResource("Panel");
-                var borderBrush = (SolidColorBrush)FindResource("Border");
-                var cardBrush  = (SolidColorBrush)FindResource("Card");
-                var textBrush  = (SolidColorBrush)FindResource("Text");
+                var bgBrush   = (SolidColorBrush)FindResource("WindowBg");
+                var panelBrush = (SolidColorBrush)FindResource("Surface");
+                var borderBrush = (SolidColorBrush)FindResource("BorderColor");
+                var cardBrush  = (SolidColorBrush)FindResource("CardBg");
+                var textBrush  = (SolidColorBrush)FindResource("TextPrimary");
                 var accentBrush = (SolidColorBrush)FindResource("Accent");
 
                 var tb = new System.Windows.Controls.TextBox
@@ -3122,7 +3673,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
                     Text       = Lang.T("LogWindowLive"),
                     FontFamily = new System.Windows.Media.FontFamily("Consolas"),
                     FontSize   = 10,
-                    Foreground = (SolidColorBrush)FindResource("Green"),
+                    Foreground = (SolidColorBrush)FindResource("Success"),
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin     = new Thickness(0, 0, 12, 0)
                 };
@@ -3252,7 +3803,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
                     Dispatcher.BeginInvoke(() =>
                     {
                         tailLabel.Text       = Lang.T("LogWindowStopped");
-                        tailLabel.Foreground = (SolidColorBrush)FindResource("Sub");
+                        tailLabel.Foreground = (SolidColorBrush)FindResource("TextMuted");
                     });
                 };
 
@@ -3275,10 +3826,11 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
         // ── Logging ────────────────────────────────────────────────────────────
 
         private enum LogLevel { Debug, Info, Ok, Warn }
-        private static readonly SolidColorBrush LInfo = new(Color.FromRgb(88,  166, 255));
-        private static readonly SolidColorBrush LOk   = new(Color.FromRgb(63,  185,  80));
-        private static readonly SolidColorBrush LWarn = new(Color.FromRgb(247, 129, 102));
-        private static readonly SolidColorBrush LTime = new(Color.FromRgb(48,   54,  61));
+        private static SolidColorBrush LInfo  => ThemeRes.Accent;
+        private static SolidColorBrush LOk    => ThemeRes.Success;
+        private static SolidColorBrush LWarn  => ThemeRes.Danger;
+        private static SolidColorBrush LTime  => ThemeRes.Border;
+        private static SolidColorBrush LDebug => ThemeRes.TextMuted;
 
         // A log entry is either a translatable key+args pair, or a raw (external) string.
         private record LogEntry(DateTime Time, LogLevel Level, string? Key, object[]? Args, string? Raw);
@@ -3289,7 +3841,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
         // Log a translatable message by key (app-generated messages)
         private void Log(string key, LogLevel level, params object[] args)
         {
-            if (level == LogLevel.Debug && _cfg.LogLevelSetting != "debug") return;
+            if (!ShouldLog(level)) return;
             // Marshal to UI thread when called from a background worker (e.g. async connect).
             if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(() => Log(key, level, args)); return; }
             var entry = new LogEntry(DateTime.Now, level, key, args, null);
@@ -3301,7 +3853,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
         // Log a raw untranslatable string (e.g. OS error messages, WireGuard internals)
         private void LogRaw(string message, LogLevel level)
         {
-            if (level == LogLevel.Debug && _cfg.LogLevelSetting != "debug") return;
+            if (!ShouldLog(level)) return;
             // Marshal to UI thread when called from a background worker (e.g. async connect).
             if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(() => LogRaw(message, level)); return; }
             var entry = new LogEntry(DateTime.Now, level, null, null, message);
@@ -3309,6 +3861,19 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
             if (_logEntries.Count > MaxLogEntries) _logEntries.RemoveAt(_logEntries.Count - 1);
             RenderLogEntry(entry, prepend: true);
         }
+
+        // Determines whether a given level should appear under the current LogLevelSetting:
+        //   normal   — Ok + Warn only
+        //   info     — Ok + Warn + Info
+        //   verbose  — Ok + Warn + Info + (all non-debug)
+        //   debug    — everything including Debug
+        private bool ShouldLog(LogLevel level) => _cfg.LogLevelSetting switch
+        {
+            "debug"   => true,
+            "verbose" => level != LogLevel.Debug,
+            "info"    => level == LogLevel.Ok || level == LogLevel.Warn || level == LogLevel.Info,
+            _         => level == LogLevel.Ok || level == LogLevel.Warn,   // "normal"
+        };
 
         private void LogDebug(string key, params object[] args) =>
             Log(key, LogLevel.Debug, args);
@@ -3324,7 +3889,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
                 var para = new Paragraph { Margin = new Thickness(0) };
                 para.Inlines.Add(new Run(entry.Time.ToString("HH:mm:ss") + "  ") { Foreground = LTime });
                 para.Inlines.Add(new Run(text) { Foreground = entry.Level switch
-                    { LogLevel.Ok => LOk, LogLevel.Warn => LWarn, LogLevel.Debug => LTime, _ => LInfo } });
+                    { LogLevel.Ok => LOk, LogLevel.Warn => LWarn, LogLevel.Debug => LDebug, _ => LInfo } });
 
                 if (prepend)
                 {
@@ -3360,6 +3925,85 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
 
         private Views.SettingsWindow? _settingsWindow;
 
+        // ── Right-panel tab switching ─────────────────────────────────────────
+        private string _activeRightTab = "Log";
+
+        private void RightTab_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is System.Windows.Controls.Button btn && btn.Tag is string tab)
+                ShowRightTab(tab);
+        }
+
+        private void ShowRightTab(string tab)
+        {
+            _activeRightTab = tab;
+
+            // Pages
+            if (RPageLog      != null) RPageLog.Visibility      = tab == "Log"      ? Visibility.Visible : Visibility.Collapsed;
+            if (RulesListView != null) RulesListView.Visibility  = tab == "Rules"    ? Visibility.Visible : Visibility.Collapsed;
+            if (RPageDefault  != null) RPageDefault.Visibility  = tab == "Default"  ? Visibility.Visible : Visibility.Collapsed;
+            if (RPageOpenWifi != null) RPageOpenWifi.Visibility  = tab == "OpenWifi" ? Visibility.Visible : Visibility.Collapsed;
+
+            // Bottom button bars
+            if (RulesButtonBar != null)
+                RulesButtonBar.Visibility = tab == "Rules" ? Visibility.Visible : Visibility.Collapsed;
+            if (LogButtonBar != null)
+                LogButtonBar.Visibility = tab == "Log" ? Visibility.Visible : Visibility.Collapsed;
+
+            // Tab button highlight
+            void Style(System.Windows.Controls.Button? b, bool active)
+            {
+                if (b == null) return;
+                b.BorderThickness = new Thickness(0, 0, 0, active ? 2 : 0);
+                b.BorderBrush     = active
+                    ? (System.Windows.Media.Brush)FindResource("Accent")
+                    : System.Windows.Media.Brushes.Transparent;
+                b.Foreground = active
+                    ? (System.Windows.Media.Brush)FindResource("Accent")
+                    : (System.Windows.Media.Brush)FindResource("TextMuted");
+                b.FontWeight = active ? FontWeights.Bold : FontWeights.Normal;
+            }
+
+            Style(RTabBtnLog,      tab == "Log");
+            Style(RTabBtnRules,    tab == "Rules");
+            Style(RTabBtnDefault,  tab == "Default");
+            Style(RTabBtnOpenWifi, tab == "OpenWifi");
+        }
+
+        private void ExportLog_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Title      = Lang.T("ExportLogTitle"),
+                Filter     = "Text file (*.txt)|*.txt|All files (*.*)|*.*",
+                FileName   = $"MasselGUARD_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
+                DefaultExt = ".txt",
+            };
+            if (dlg.ShowDialog() != true) return;
+            try
+            {
+                var lines = new System.Text.StringBuilder();
+                var doc   = LogDocument;
+                foreach (var block in doc.Blocks)
+                {
+                    if (block is System.Windows.Documents.Paragraph p)
+                    {
+                        foreach (var inline in p.Inlines)
+                            if (inline is System.Windows.Documents.Run r)
+                                lines.Append(r.Text);
+                        lines.AppendLine();
+                    }
+                }
+                File.WriteAllText(dlg.FileName, lines.ToString(), System.Text.Encoding.UTF8);
+                Log("ExportLogSuccess", LogLevel.Ok, dlg.FileName);
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show(ex.Message, Lang.T("ExportLogTitle"),
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
         private void SettingsBtn_Click(object sender, RoutedEventArgs e)
         {
             if (_settingsWindow != null && _settingsWindow.IsVisible)
@@ -3371,14 +4015,80 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
             _settingsWindow.Show();
         }
 
+        // ── Theme toggle button (title bar) ───────────────────────────────────
+        // Cycles: Dark → Light → Auto, updates icon, applies immediately
+        private void ThemeToggle_Click(object sender, RoutedEventArgs e)
+        {
+            // Cycle: Dark → Light → Auto → Dark
+            if (_cfg.AutoTheme)
+            {
+                _cfg.AutoTheme   = false;
+                _cfg.ActiveTheme = _cfg.ActiveDarkTheme;
+                ThemeManager.Instance.Load(_cfg.ActiveTheme);
+                LogRaw($"Theme: dark ({_cfg.ActiveTheme})", LogLevel.Info);
+            }
+            else
+            {
+                bool onDark = _cfg.ActiveTheme == _cfg.ActiveDarkTheme ||
+                              ThemeManager.Instance.Current.Type
+                                  .Equals("dark", StringComparison.OrdinalIgnoreCase);
+                if (onDark)
+                {
+                    _cfg.ActiveTheme = _cfg.ActiveLightTheme;
+                    ThemeManager.Instance.Load(_cfg.ActiveTheme);
+                    LogRaw($"Theme: light ({_cfg.ActiveTheme})", LogLevel.Info);
+                }
+                else
+                {
+                    _cfg.AutoTheme   = true;
+                    bool isDark      = ThemeManager.GetSystemIsDark();
+                    _cfg.ActiveTheme = isDark ? _cfg.ActiveDarkTheme : _cfg.ActiveLightTheme;
+                    ThemeManager.Instance.Load(_cfg.ActiveTheme);
+                    LogRaw($"Theme: auto → {(isDark ? "dark" : "light")} ({_cfg.ActiveTheme})", LogLevel.Info);
+                }
+            }
+
+            AppConfig.SaveThemeConfig(_cfg.ActiveTheme, _cfg.ActiveDarkTheme,
+                                      _cfg.ActiveLightTheme, _cfg.AutoTheme);
+            UpdateThemeToggleIcon();
+
+            if (_settingsWindow is { IsVisible: true } sw)
+                sw.RefreshThemeSection();
+        }
+
+        internal void UpdateThemeToggleIcon()
+        {
+            if (ThemeToggleBtn == null) return;
+            if (_cfg.AutoTheme)
+                ThemeToggleBtn.Content = "⚡";
+            else if (_cfg.ActiveTheme == _cfg.ActiveLightTheme ||
+                     ThemeManager.Instance.Current.Type
+                         .Equals("light", StringComparison.OrdinalIgnoreCase))
+                ThemeToggleBtn.Content = "☀";
+            else
+                ThemeToggleBtn.Content = "🌙";
+
+            // Apply custom appIcon to Window.Icon (taskbar) when set
+            if (Application.Current.Resources["Theme.AppIcon"] is System.Windows.Media.Imaging.BitmapImage bmp)
+                Icon = bmp;
+            else
+                Icon = null;
+
+            // Refresh tunnel name/status colours — they read ThemeRes which changed
+            foreach (var t in _tunnels) t.RefreshLabels();
+        }
+
         // Public wrappers used by SettingsWindow
         public void LogDebugPublic(string key, params object[] args) => LogDebug(key, args);
+        public void LogInfoPublic(string message) => LogRaw(message, LogLevel.Info);
+        public void RefreshTunnelDropdownsPublic()  => RefreshTunnelDropdowns();
         public void OpenWireGuardGui()  => OpenWireGuardGui_Click(this, new RoutedEventArgs());
         public void OpenWireGuardLog()  => ShowWireGuardLog_Click(this, new RoutedEventArgs());
         public void ApplyLocalTunnelModePublic() => ApplyLocalTunnelMode();
         public bool   IsInstalledCheck()        => IsInstalled();
         public string? GetInstalledPathPublic()  => GetInstalledPath();
         public AppConfig GetConfig()             => _cfg;
+        public static AppConfig? GetConfigStatic() => _cfg;
         public void   SaveConfigPublic()         => SaveConfig();
         public void   SetMode(AppMode mode)
         {
@@ -3595,16 +4305,67 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
                 System.Security.Principal.WindowsIdentity.GetCurrent())
                 .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
             AdminLabel.Text       = admin ? Lang.T("LogAdminYes") : Lang.T("LogAdminNo");
-            AdminLabel.Foreground = admin ? (SolidColorBrush)FindResource("Green") : (SolidColorBrush)FindResource("Red");
+            AdminLabel.Foreground = admin ? (SolidColorBrush)FindResource("Success") : (SolidColorBrush)FindResource("Danger");
         }
     }
 
     // Simple data class for the language picker ComboBox
     public class LangItem
     {
-        public string Code { get; }
-        public string Name { get; }
-        public LangItem(string code, string name) { Code = code; Name = name; }
-        public override string ToString() => Name;
+        private static readonly Dictionary<string, string> Flags = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["en"] = "🇬🇧",
+            ["nl"] = "🇳🇱",
+            ["de"] = "🇩🇪",
+            ["fr"] = "🇫🇷",
+            ["es"] = "🇪🇸",
+            ["pt"] = "🇵🇹",
+            ["it"] = "🇮🇹",
+            ["pl"] = "🇵🇱",
+            ["ru"] = "🇷🇺",
+            ["ja"] = "🇯🇵",
+            ["zh"] = "🇨🇳",
+            ["ko"] = "🇰🇷",
+            ["ar"] = "🇸🇦",
+            ["tr"] = "🇹🇷",
+            ["sv"] = "🇸🇪",
+            ["no"] = "🇳🇴",
+            ["da"] = "🇩🇰",
+            ["fi"] = "🇫🇮",
+        };
+
+        public string Code  { get; }
+        public string Name  { get; }
+        public LangItem(string code, string name)
+        {
+            Code = code.ToUpperInvariant();
+            // Strip any leading emoji/flag characters and whitespace
+            // (_language in JSON files may contain e.g. "🇬🇧  English")
+            var trimmed = name.TrimStart();
+            int i = 0;
+            while (i < trimmed.Length)
+            {
+                var cat = char.GetUnicodeCategory(trimmed[i]);
+                // Skip regional indicator letters (flags) and spaces
+                if (trimmed[i] > 127 || trimmed[i] == ' ')
+                    i++;
+                else
+                    break;
+            }
+            Name = i > 0 && i < trimmed.Length ? trimmed[i..].TrimStart() : trimmed;
+        }
+        public override string ToString() => $"[{Code}] {Name}";
+    }
+
+    public class ThemePickerItem
+    {
+        public string FolderName   { get; }
+        public string DisplayName  { get; }
+        public ThemePickerItem(string folder, string display)
+        {
+            FolderName  = folder;
+            DisplayName = display;
+        }
+        public override string ToString() => DisplayName;
     }
 }
