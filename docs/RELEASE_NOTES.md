@@ -4,6 +4,34 @@ All notable changes are documented here. The most recent release is at the top.
 
 ---
 
+## v2.5.0
+
+### Features
+
+**High-contrast themes**
+Two new built-in themes with maximum colour contrast and separation: `highcontrast-dark` and `highcontrast-light`. Replaces the earlier colour-blind themes. Suited for low-vision users and high-brightness environments.
+
+**Single-instance dialog improved**
+When a second instance is launched, the dialog now offers two buttons: **Show running instance** (brings the existing window to the foreground, restores it if minimised) and **Exit** (closes the new instance). Previously only an OK/dismiss button was shown.
+
+**DLL layout reorganised**
+`tunnel.dll` and `wireguard.dll` moved to `wireguard-deps\` subfolder in the source tree. `BUILD.bat` copies from there automatically — no prompt, no choices.
+
+**`BUILD.bat` simplified**
+All download/build DLL options removed. Build simply compiles, copies themes, and copies DLLs from `wireguard-deps\`. If DLLs are missing it points to `tunnelbuild.bat`.
+
+**`tunnelbuild.bat` added**
+New script dedicated to obtaining tunnel DLLs: build from source (Go + gcc) or download from GitHub. Outputs to `wireguard-deps\`.
+
+**Installer copies all subdirectories**
+When installing over an existing version, all subdirectories (including `theme\`, `lang\`) are now recursively copied and overwritten, ensuring themes are kept current.
+
+### Bug fixes
+
+- Colour-blind themes renamed to High Contrast (name more accurately reflects their design intent).
+
+---
+
 ## v2.3.1
 
 ### Features

@@ -735,7 +735,7 @@ namespace MasselGUARD
             // extract the handle, create the BitmapSource, then destroy the handle manually.
             try
             {
-                var drawingIcon = TrayIconHelper.CreateIcon(false);
+                var drawingIcon = TrayIconHelper.CreateIcon(0);
                 var hIcon = drawingIcon.Handle;
                 Icon = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
                     hIcon,
@@ -848,7 +848,7 @@ namespace MasselGUARD
                 ? (SolidColorBrush)FindResource("Success")
                 : (SolidColorBrush)FindResource("TextMuted");
 
-            ((App)System.Windows.Application.Current).UpdateTrayStatus(TunnelLabel.Text, active.Count > 0);
+            ((App)System.Windows.Application.Current).UpdateTrayStatus(TunnelLabel.Text, active.Count);
             RefreshTunnelEntryStatuses();
             RefreshQuickConnectButton();
             RefreshWireGuardLogBtn();
@@ -2865,6 +2865,20 @@ namespace MasselGUARD
             try { if (qcPath != null && File.Exists(qcPath)) File.Delete(qcPath); } catch { }
         }
 
+        /// <summary>Copies all subdirectories from source to dest, overwriting existing files.</summary>
+        private static void CopyDirectoryRecursive(string source, string dest)
+        {
+            foreach (var dir in Directory.GetDirectories(source))
+            {
+                var dirName = Path.GetFileName(dir);
+                var destDir = Path.Combine(dest, dirName);
+                Directory.CreateDirectory(destDir);
+                foreach (var file in Directory.GetFiles(dir))
+                    File.Copy(file, Path.Combine(destDir, Path.GetFileName(file)), overwrite: true);
+                CopyDirectoryRecursive(dir, destDir);
+            }
+        }
+
         private void RunInstall()
         {
             // Check if already running from an installed location
@@ -2894,24 +2908,19 @@ namespace MasselGUARD
                 // 1. Create install folder and copy all files
                 Directory.CreateDirectory(installDir);
                 var sourceDir = Path.GetDirectoryName(currentExe)!;
+
+                // Copy all files in exe dir
                 foreach (var file in Directory.GetFiles(sourceDir))
                     File.Copy(file, Path.Combine(installDir, Path.GetFileName(file)), overwrite: true);
 
-                // Copy lang subfolder
-                var sourceLang = Path.Combine(sourceDir, "lang");
-                if (Directory.Exists(sourceLang))
-                {
-                    var destLang = Path.Combine(installDir, "lang");
-                    Directory.CreateDirectory(destLang);
-                    foreach (var file in Directory.GetFiles(sourceLang))
-                        File.Copy(file, Path.Combine(destLang, Path.GetFileName(file)), overwrite: true);
-                }
+                // Copy all subdirectories recursively (lang, theme, etc.)
+                CopyDirectoryRecursive(sourceDir, installDir);
 
                 var installedExe = Path.Combine(installDir, "MasselGUARD.exe");
 
                 // Save icon as .ico file in install dir for the Start Menu shortcut
                 var icoPath = Path.Combine(installDir, "MasselGUARD.ico");
-                using (var icon = TrayIconHelper.CreateIcon(false))
+                using (var icon = TrayIconHelper.CreateIcon(0))
                 using (var fs = File.Create(icoPath))
                     icon.Save(fs);
 

@@ -1,7 +1,7 @@
 {
   "_language": "🇳🇱  Nederlands",
   "_code": "nl",
-  "AppTitle": "MasselGUARD v2.3.1",
+  "AppTitle": "MasselGUARD v2.5.0",
   "StatusWifi": "WiFi:",
   "StatusActiveTunnel": "Actieve tunnel:",
   "StatusScanning": "Scannen…",
@@ -114,6 +114,9 @@
   "BtnClose": "Sluiten",
   "AlreadyRunningTitle": "Al actief",
   "AlreadyRunningMessage": "WireGuard Client en WiFi Switcher is al actief.\n\nZoek in het systeemvak — klik op het pictogram om het venster te tonen.",
+  "AlreadyRunningChoice": "Wat wil je doen?",
+  "AlreadyRunningBtnShow": "Toon lopende instantie",
+  "AlreadyRunningBtnExit": "Afsluiten",
   "BtnOk": "OK",
   "BtnInstall": "⬇  Installeren",
   "BtnUninstall": "⬆  Verwijderen",

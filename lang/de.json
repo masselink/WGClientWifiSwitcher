@@ -1,7 +1,7 @@
 {
   "_language": "🇩🇪  Deutsch",
   "_code": "de",
-  "AppTitle": "MasselGUARD v2.3.1",
+  "AppTitle": "MasselGUARD v2.5.0",
   "StatusWifi": "WLAN:",
   "StatusActiveTunnel": "Aktiver Tunnel:",
   "StatusScanning": "Suche…",
@@ -114,6 +114,9 @@
   "BtnClose": "Close",
   "AlreadyRunningTitle": "Already running",
   "AlreadyRunningMessage": "MasselGUARD is already running.\n\nCheck the system tray — click the icon to show the window.",
+  "AlreadyRunningChoice": "Was möchten Sie tun?",
+  "AlreadyRunningBtnShow": "Laufende Instanz anzeigen",
+  "AlreadyRunningBtnExit": "Beenden",
   "BtnOk": "OK",
   "BtnInstall": "Installieren",
   "BtnUninstall": "Deinstallieren",
