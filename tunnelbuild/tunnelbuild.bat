@@ -14,15 +14,12 @@ echo            gcc/MinGW  https://www.mingw-w64.org/
 echo            git        https://git-scm.com/
 echo.
 echo  DLLs will be placed in:
-echo    ..\wireguard-deps\tunnel.dll
-echo    ..\wireguard-deps\wireguard.dll
-echo.
-echo  After this, run ..\BUILD.bat to compile MasselGUARD.
+echo    tunnelbuild\wireguard-deps\tunnel.dll
+echo    tunnelbuild\wireguard-deps\wireguard.dll
 echo.
 
-rem Parent folder of this script (project root)
-set ROOT=%~dp0..
-set DEPS=%ROOT%\wireguard-deps
+rem All paths relative to this script's location (tunnelbuild\)
+set DEPS=%~dp0wireguard-deps
 set TEMP_BUILD=%~dp0build-temp
 
 if not exist "!DEPS!" mkdir "!DEPS!"
@@ -49,14 +46,24 @@ if not exist "!DEPS!\wireguard.dll" (
 )
 
 echo.
+echo  -------------------------------------------------------
+echo   Cleaning up build-temp...
+echo  -------------------------------------------------------
+if exist "!TEMP_BUILD!" (
+    rmdir /s /q "!TEMP_BUILD!"
+    echo   build-temp removed.
+)
+
+echo.
 echo  ==========================================
-echo   DLLs ready in wireguard-deps\
+echo   DLLs ready in tunnelbuild\wireguard-deps\
 echo  ==========================================
 echo.
-echo   ..\wireguard-deps\tunnel.dll
-echo   ..\wireguard-deps\wireguard.dll
+echo   tunnelbuild\wireguard-deps\tunnel.dll
+echo   tunnelbuild\wireguard-deps\wireguard.dll
 echo.
-echo   Run ..\BUILD.bat to compile and package MasselGUARD.
+echo  Copy these to the root wireguard-deps\ folder,
+echo  then run BUILD.bat to compile and package MasselGUARD.
 echo.
 pause
 exit /b 0

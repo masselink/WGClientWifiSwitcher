@@ -3,7 +3,7 @@ param(
     [string]$Dist
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
 $wgDll = Join-Path $Deps 'wireguard.dll'
 $tnDll = Join-Path $Deps 'tunnel.dll'
@@ -82,15 +82,29 @@ if (Test-Path $tnDll) {
         throw 'git not found.'
     }
 
-    Write-Host "        Go found: $(& go version)"
+    Write-Host "        Go found: $(& go version 2>&1)"
     Write-Host '        Cloning wireguard-windows...'
     $wgWinDir = Join-Path $Deps 'wireguard-windows'
 
     if (-not (Test-Path (Join-Path $wgWinDir '.git'))) {
-        git clone --depth=1 https://git.zx2c4.com/wireguard-windows $wgWinDir 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'git clone failed.' }
+        # Use Start-Process to avoid PowerShell treating git's stderr progress
+        # output as a NativeCommandError (git writes info to stderr by design)
+        $proc = Start-Process -FilePath 'git' `
+            -ArgumentList @('clone','--depth=1','https://git.zx2c4.com/wireguard-windows',$wgWinDir) `
+            -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput (Join-Path $Deps 'git_out.txt') `
+            -RedirectStandardError  (Join-Path $Deps 'git_err.txt')
+        if (Test-Path (Join-Path $Deps 'git_err.txt')) {
+            Get-Content (Join-Path $Deps 'git_err.txt') | ForEach-Object { Write-Host "        $_" }
+        }
+        if ($proc.ExitCode -ne 0) { throw "git clone failed (exit $($proc.ExitCode))." }
     } else {
-        git -C $wgWinDir pull --ff-only 2>&1 | Out-Null
+        $proc = Start-Process -FilePath 'git' `
+            -ArgumentList @('-C',$wgWinDir,'pull','--ff-only') `
+            -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput (Join-Path $Deps 'git_out.txt') `
+            -RedirectStandardError  (Join-Path $Deps 'git_err.txt')
+        if ($proc.ExitCode -ne 0) { throw "git pull failed (exit $($proc.ExitCode))." }
     }
 
     $buildDir = Join-Path $wgWinDir 'embeddable-dll-service'

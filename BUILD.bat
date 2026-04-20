@@ -84,7 +84,7 @@ if exist "!DEPS!\tunnel.dll" (
     echo    Copied: tunnel.dll
 ) else (
     echo  WARNING: wireguard-deps\tunnel.dll not found.
-    echo           Run tunnelbuild\\tunnelbuild.bat to build or download DLLs.
+    echo           Run tunnelbuild\\tunnelbuild.bat, then copy DLLs to wireguard-deps\.
     set DLL_OK=0
 )
 
@@ -93,7 +93,7 @@ if exist "!DEPS!\wireguard.dll" (
     echo    Copied: wireguard.dll
 ) else (
     echo  WARNING: wireguard-deps\wireguard.dll not found.
-    echo           Run tunnelbuild\\tunnelbuild.bat to build or download DLLs.
+    echo           Run tunnelbuild\\tunnelbuild.bat, then copy DLLs to wireguard-deps\.
     set DLL_OK=0
 )
 
@@ -113,7 +113,7 @@ if "!DLL_OK!"=="1" (
 ) else (
     echo.
     echo   NOTE: One or more DLLs not copied.
-    echo   Run tunnelbuild\\tunnelbuild.bat to rebuild or download,
+    echo   Run tunnelbuild\\tunnelbuild.bat to rebuild,
     echo   then re-run BUILD.bat, or copy DLLs manually.
 )
 echo.

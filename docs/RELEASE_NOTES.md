@@ -9,7 +9,7 @@ All notable changes are documented here. The most recent release is at the top.
 ### Features
 
 **High-contrast themes**
-Two new built-in themes with maximum colour contrast and separation: `highcontrast-dark` and `highcontrast-light`. Replaces the earlier colour-blind themes. Suited for low-vision users and high-brightness environments.
+Two new built-in themes with maximum colour contrast and separation: `highcontrast-dark` and `highcontrast-light`. Suited for low-vision users and high-brightness environments.
 
 **Single-instance dialog improved**
 When a second instance is launched, the dialog now offers two buttons: **Show running instance** (brings the existing window to the foreground, restores it if minimised) and **Exit** (closes the new instance). Previously only an OK/dismiss button was shown.
@@ -28,16 +28,12 @@ When installing over an existing version, all subdirectories (including `theme\`
 
 ### Bug fixes
 
-- Colour-blind themes renamed to High Contrast (name more accurately reflects their design intent).
 
 ---
 
 ## v2.3.1
 
 ### Features
-
-**Colour-blind themes**
-Two new built-in themes using the IBM colour-blind safe palette (distinguishable for deuteranopia, protanopia and tritanopia): `colorblind-dark` and `colorblind-light`. Accent colour: #648FFF (blue), success/warning: #FFB000 (gold), danger/error: #DC267F (magenta).
 
 **Language picker redesign**
 The language picker now shows a styled `[XX]` code badge (accent colour, Consolas font) next to the language name — replacing flag emoji which render as plain text pairs (e.g. "GB") in WPF on Windows.

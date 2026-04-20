@@ -308,32 +308,46 @@ namespace MasselGUARD
         private void ShowAlreadyRunning()
         {
             // colours — defined inline since App resources aren't loaded yet
-            var bg     = System.Windows.Media.Color.FromRgb(13,  17,  23);
-            var panel  = System.Windows.Media.Color.FromRgb(22,  27,  34);
-            var border = System.Windows.Media.Color.FromRgb(48,  54,  61);
-            var accent = System.Windows.Media.Color.FromRgb(88, 166, 255);
-            var textC  = System.Windows.Media.Color.FromRgb(230, 237, 243);
-            var subC   = System.Windows.Media.Color.FromRgb(139, 148, 158);
-            var warn   = System.Windows.Media.Color.FromRgb(247, 129, 102);
-            var green  = System.Windows.Media.Color.FromRgb(63, 185, 80);
-
+            var bg      = System.Windows.Media.Color.FromRgb(13,  17,  23);
+            var panel   = System.Windows.Media.Color.FromRgb(22,  27,  34);
+            var border  = System.Windows.Media.Color.FromRgb(48,  54,  61);
+            var accent  = System.Windows.Media.Color.FromRgb(88, 166, 255);
+            var textC   = System.Windows.Media.Color.FromRgb(230, 237, 243);
+            var subC    = System.Windows.Media.Color.FromRgb(139, 148, 158);
+            var warn    = System.Windows.Media.Color.FromRgb(247, 129,  102);
+            var green   = System.Windows.Media.Color.FromRgb(63, 185,  80);
             System.Windows.Media.Brush Br(System.Windows.Media.Color c) =>
                 new System.Windows.Media.SolidColorBrush(c);
 
-            System.Windows.Controls.Button MakeBtn(string label,
-                System.Windows.Media.Color fg, System.Windows.Media.Color bg2) =>
-                new System.Windows.Controls.Button
+            // Use Border+TextBlock — WPF Button ignores Foreground via default chrome
+            System.Windows.Controls.Border MakeBtn(string label,
+                System.Windows.Media.Color fg, System.Windows.Media.Color bgCol,
+                System.Windows.Media.Color hoverCol)
+            {
+                var tb = new System.Windows.Controls.TextBlock
                 {
-                    Content           = label,
-                    FontFamily        = new System.Windows.Media.FontFamily("Consolas"),
-                    FontSize          = 11,
-                    Foreground        = Br(fg),
-                    Background        = Br(bg2),
-                    BorderBrush       = Br(border),
-                    BorderThickness   = new Thickness(1),
-                    Padding           = new Thickness(20, 6, 20, 6),
-                    Cursor            = System.Windows.Input.Cursors.Hand
+                    Text                = label,
+                    FontFamily          = new System.Windows.Media.FontFamily("Consolas"),
+                    FontSize            = 11,
+                    FontWeight          = FontWeights.Bold,
+                    Foreground          = Br(fg),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment   = VerticalAlignment.Center,
                 };
+                var b = new System.Windows.Controls.Border
+                {
+                    Background      = Br(bgCol),
+                    BorderBrush     = Br(fg),   // border matches text colour for clear contrast
+                    BorderThickness = new Thickness(1),
+                    CornerRadius    = new CornerRadius(4),
+                    Padding         = new Thickness(20, 7, 20, 7),
+                    Cursor          = System.Windows.Input.Cursors.Hand,
+                    Child           = tb,
+                };
+                b.MouseEnter += (_, _) => b.Background = Br(hoverCol);
+                b.MouseLeave += (_, _) => b.Background = Br(bgCol);
+                return b;
+            }
 
             var stack = new System.Windows.Controls.StackPanel
                 { Margin = new Thickness(28, 20, 28, 24) };
@@ -372,8 +386,13 @@ namespace MasselGUARD
                 HorizontalAlignment = HorizontalAlignment.Right
             };
 
-            var showBtn = MakeBtn(Lang.T("AlreadyRunningBtnShow"), green, panel);
-            var exitBtn = MakeBtn(Lang.T("AlreadyRunningBtnExit"), textC, panel);
+            // Show: green text on dark-green bg; Exit: light text on neutral bg
+            var bgShow  = System.Windows.Media.Color.FromRgb(22, 55, 25);    // dark green
+            var hovShow = System.Windows.Media.Color.FromRgb(30, 80, 35);    // brighter green hover
+            var bgExit  = System.Windows.Media.Color.FromRgb(36, 41, 51);    // neutral dark
+            var hovExit = System.Windows.Media.Color.FromRgb(55, 62, 76);    // lighter hover
+            var showBtn = MakeBtn(Lang.T("AlreadyRunningBtnShow"), green, bgShow, hovShow);
+            var exitBtn = MakeBtn(Lang.T("AlreadyRunningBtnExit"), textC, bgExit, hovExit);
             exitBtn.Margin = new Thickness(8, 0, 0, 0);
 
             btnRow.Children.Add(showBtn);
@@ -432,14 +451,14 @@ namespace MasselGUARD
             };
 
             // "Show running instance" — bring to front and close this dialog
-            showBtn.Click += (_, _) =>
+            showBtn.MouseLeftButtonUp += (_, _) =>
             {
                 BringExistingToFront();
                 win.Close();
             };
 
             // "Exit" — just close the dialog (caller will Shutdown() this instance)
-            exitBtn.Click += (_, _) => win.Close();
+            exitBtn.MouseLeftButtonUp += (_, _) => win.Close();
 
             win.ShowDialog();
         }

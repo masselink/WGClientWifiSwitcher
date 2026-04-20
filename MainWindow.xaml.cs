@@ -358,12 +358,21 @@ namespace MasselGUARD
             return new SolidColorBrush(fallback);
         }
 
-        public static SolidColorBrush Accent      => Get("Accent",      Color.FromRgb(88,  166, 255));
-        public static SolidColorBrush Success     => Get("Success",     Color.FromRgb(63,  185,  80));
-        public static SolidColorBrush Danger      => Get("Danger",      Color.FromRgb(247, 129, 102));
-        public static SolidColorBrush TextPrimary => Get("TextPrimary", Color.FromRgb(230, 237, 243));
-        public static SolidColorBrush TextMuted   => Get("TextMuted",   Color.FromRgb(139, 148, 158));
-        public static SolidColorBrush Border      => Get("BorderColor", Color.FromRgb(48,   54,  61));
+        private static SolidColorBrush GetFromColor(string key, Color fallback)
+        {
+            var res = Application.Current?.Resources;
+            if (res?[key] is Color c) return new SolidColorBrush(c);
+            if (res?[key] is SolidColorBrush b) return b;
+            return new SolidColorBrush(fallback);
+        }
+
+        public static SolidColorBrush Accent        => Get("Accent",      Color.FromRgb(88,  166, 255));
+        public static SolidColorBrush Success       => Get("Success",     Color.FromRgb(63,  185,  80));
+        public static SolidColorBrush Danger        => Get("Danger",      Color.FromRgb(247, 129, 102));
+        public static SolidColorBrush TextPrimary   => Get("TextPrimary", Color.FromRgb(230, 237, 243));
+        public static SolidColorBrush TextMuted     => Get("TextMuted",   Color.FromRgb(139, 148, 158));
+        public static SolidColorBrush Border        => Get("BorderColor", Color.FromRgb(48,   54,  61));
+        public static SolidColorBrush LogTimestamp  => GetFromColor("Theme.LogTimestampColor", Color.FromRgb(48, 54, 61));
     }
 
     public partial class MainWindow : Window
@@ -3838,7 +3847,7 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
         private static SolidColorBrush LInfo  => ThemeRes.Accent;
         private static SolidColorBrush LOk    => ThemeRes.Success;
         private static SolidColorBrush LWarn  => ThemeRes.Danger;
-        private static SolidColorBrush LTime  => ThemeRes.Border;
+        private static SolidColorBrush LTime  => ThemeRes.LogTimestamp;
         private static SolidColorBrush LDebug => ThemeRes.TextMuted;
 
         // A log entry is either a translatable key+args pair, or a raw (external) string.
@@ -3896,8 +3905,15 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
                     : (entry.Raw ?? "");
 
                 var para = new Paragraph { Margin = new Thickness(0) };
-                para.Inlines.Add(new Run(entry.Time.ToString("HH:mm:ss") + "  ") { Foreground = LTime });
-                para.Inlines.Add(new Run(text) { Foreground = entry.Level switch
+                para.Inlines.Add(new Run(entry.Time.ToString("HH:mm:ss") + " ") { Foreground = LTime });
+
+                // Lines that start with spaces are continuation/detail lines — render a dim
+                // indent marker instead of dumping raw leading whitespace into the RichTextBox.
+                var trimmed = text.TrimStart();
+                if (trimmed != text && trimmed.Length > 0)
+                    para.Inlines.Add(new Run("  ↳ ") { Foreground = LTime });
+
+                para.Inlines.Add(new Run(trimmed) { Foreground = entry.Level switch
                     { LogLevel.Ok => LOk, LogLevel.Warn => LWarn, LogLevel.Debug => LDebug, _ => LInfo } });
 
                 if (prepend)
