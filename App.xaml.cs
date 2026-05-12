@@ -54,7 +54,7 @@ namespace MasselGUARD
             sysPollTimer.Tick += (_, _) => PollSystemTheme();
             sysPollTimer.Start();
 
-            // ── 2. Single-instance check (mutex) ────────────────────────────
+            // ── 2. Single-instance check ────────────────────────────────────
             bool isNewInstance = false;
             try
             {
@@ -65,15 +65,38 @@ namespace MasselGUARD
             }
             catch (UnauthorizedAccessException)
             {
-                // Mutex exists but belongs to a different session/user — treat as already running
                 isNewInstance = false;
             }
 
             if (!isNewInstance)
             {
-                ShowAlreadyRunning();
-                Shutdown();
-                return;
+                // Verify a real process is running before treating as duplicate.
+                // After install/move the mutex can be orphaned (old process exited
+                // without releasing it). Retry up to 2 s if no real instance found.
+                if (!RealInstanceExists())
+                {
+                    for (int i = 0; i < 4 && !isNewInstance; i++)
+                    {
+                        System.Threading.Thread.Sleep(500);
+                        try
+                        {
+                            _instanceMutex?.Dispose();
+                            _instanceMutex = new Mutex(
+                                initiallyOwned: true,
+                                name: "Global\\MasselGUARD_SingleInstance",
+                                out isNewInstance);
+                        }
+                        catch { }
+                    }
+                }
+
+                if (!isNewInstance && RealInstanceExists())
+                {
+                    ShowAlreadyRunning();
+                    Shutdown();
+                    return;
+                }
+                // Orphaned mutex acquired after retry — continue normally
             }
 
 
@@ -302,6 +325,14 @@ namespace MasselGUARD
                 }
                 catch { }
             }
+            return false;
+        }
+
+        private static bool RealInstanceExists()
+        {
+            var current = System.Diagnostics.Process.GetCurrentProcess();
+            foreach (var p in System.Diagnostics.Process.GetProcessesByName(current.ProcessName))
+                if (p.Id != current.Id) return true;
             return false;
         }
 

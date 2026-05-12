@@ -129,6 +129,160 @@ namespace MasselGUARD.Views
         private void OpenWireGuard_Click(object sender, RoutedEventArgs e) =>
             _main.OpenWireGuardGui();
 
+        private void ExportSettings_Click(object sender, RoutedEventArgs e)
+        {
+            // Warn user before export
+            var warn = System.Windows.MessageBox.Show(
+                Lang.T("SettingsExportWarning"),
+                Lang.T("SettingsExportTitle"),
+                System.Windows.MessageBoxButton.OKCancel,
+                System.Windows.MessageBoxImage.Information);
+            if (warn != System.Windows.MessageBoxResult.OK) return;
+
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Title      = Lang.T("SettingsExportTitle"),
+                Filter     = "MasselGUARD settings (*.masselguard)|*.masselguard|JSON (*.json)|*.json",
+                FileName   = $"MasselGUARD-settings-{DateTime.Now:yyyyMMdd}",
+                DefaultExt = ".masselguard",
+            };
+            if (dlg.ShowDialog() != true) return;
+
+            try
+            {
+                var cfg = _main.GetConfig();
+                var export = new
+                {
+                    ExportVersion    = 1,
+                    AppVersion       = UpdateChecker.CurrentVersionString,
+                    ExportedAt       = DateTime.UtcNow,
+                    Rules            = cfg.Rules,
+                    TunnelGroups     = cfg.TunnelGroups,
+                    DefaultAction    = cfg.DefaultAction,
+                    DefaultTunnel    = cfg.DefaultTunnel,
+                    OpenWifiTunnel   = cfg.OpenWifiTunnel,
+                    ManualMode       = cfg.ManualMode,
+                    Mode             = cfg.Mode.ToString(),
+                    Language         = cfg.Language,
+                    ActiveTheme      = cfg.ActiveTheme,
+                    ActiveDarkTheme  = cfg.ActiveDarkTheme,
+                    ActiveLightTheme = cfg.ActiveLightTheme,
+                    AutoTheme        = cfg.AutoTheme,
+                    LogLevelSetting  = cfg.LogLevelSetting,
+                    ShowTrayPopupOnSwitch = cfg.ShowTrayPopupOnSwitch,
+                };
+                var opts = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+                System.IO.File.WriteAllText(dlg.FileName,
+                    System.Text.Json.JsonSerializer.Serialize(export, opts));
+                _main.LogInfoPublic(Lang.T("SettingsExportSuccess", dlg.FileName));
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show(
+                    Lang.T("SettingsExportError", ex.Message),
+                    Lang.T("SettingsExportTitle"),
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Error);
+            }
+        }
+
+        private void ImportSettings_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title  = Lang.T("SettingsImportTitle"),
+                Filter = "MasselGUARD settings (*.masselguard;*.json)|*.masselguard;*.json",
+            };
+            if (dlg.ShowDialog() != true) return;
+
+            try
+            {
+                var json = System.IO.File.ReadAllText(dlg.FileName);
+                var opts = new System.Text.Json.JsonSerializerOptions
+                    { PropertyNameCaseInsensitive = true };
+
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                var root = doc.RootElement;
+
+                // Version check — warn if mismatch
+                var current  = UpdateChecker.CurrentVersionString;
+                var fileVer  = root.TryGetProperty("AppVersion", out var verEl)
+                    ? verEl.GetString() ?? "" : "";
+
+                if (!string.IsNullOrEmpty(fileVer) && fileVer != current)
+                {
+                    // Compare: is the file from a newer or older version?
+                    int cmp = string.Compare(fileVer, current, StringComparison.OrdinalIgnoreCase);
+                    var warnKey = cmp > 0
+                        ? "SettingsImportVersionNewer"
+                        : "SettingsImportVersionWarning";
+                    var proceed = System.Windows.MessageBox.Show(
+                        Lang.T(warnKey, fileVer, current),
+                        Lang.T("SettingsImportTitle"),
+                        System.Windows.MessageBoxButton.YesNo,
+                        System.Windows.MessageBoxImage.Warning);
+                    if (proceed != System.Windows.MessageBoxResult.Yes) return;
+                }
+
+                var cfg = _main.GetConfig();
+
+                void TrySetString(string key, System.Action<string> setter)
+                {
+                    if (root.TryGetProperty(key, out var el) && el.ValueKind == System.Text.Json.JsonValueKind.String)
+                        setter(el.GetString() ?? "");
+                }
+                void TrySetBool(string key, System.Action<bool> setter)
+                {
+                    if (root.TryGetProperty(key, out var el) &&
+                        (el.ValueKind == System.Text.Json.JsonValueKind.True ||
+                         el.ValueKind == System.Text.Json.JsonValueKind.False))
+                        setter(el.GetBoolean());
+                }
+
+                TrySetString("DefaultAction",    v => cfg.DefaultAction   = v);
+                TrySetString("DefaultTunnel",    v => cfg.DefaultTunnel   = v);
+                TrySetString("OpenWifiTunnel",   v => cfg.OpenWifiTunnel  = v);
+                TrySetString("Language",         v => cfg.Language        = v);
+                TrySetString("ActiveTheme",      v => cfg.ActiveTheme     = v);
+                TrySetString("ActiveDarkTheme",  v => cfg.ActiveDarkTheme = v);
+                TrySetString("ActiveLightTheme", v => cfg.ActiveLightTheme= v);
+                TrySetString("LogLevelSetting",  v => cfg.LogLevelSetting = v);
+                TrySetBool("ManualMode",         v => cfg.ManualMode      = v);
+                TrySetBool("AutoTheme",          v => cfg.AutoTheme       = v);
+                TrySetBool("ShowTrayPopupOnSwitch", v => cfg.ShowTrayPopupOnSwitch = v);
+
+                if (root.TryGetProperty("Rules", out var rulesEl))
+                {
+                    var rules = System.Text.Json.JsonSerializer.Deserialize<
+                        System.Collections.Generic.List<TunnelRule>>(rulesEl.GetRawText(), opts);
+                    if (rules != null) cfg.Rules = rules;
+                }                if (root.TryGetProperty("TunnelGroups", out var grpEl))
+                {
+                    var groups = System.Text.Json.JsonSerializer.Deserialize<
+                        System.Collections.Generic.List<TunnelGroup>>(grpEl.GetRawText(), opts);
+                    if (groups != null) cfg.TunnelGroups = groups;
+                }
+
+                _main.SaveConfigPublic("Settings imported");
+                _main.ApplyManualMode();
+                ShowTab(_activeTab);
+
+                System.Windows.MessageBox.Show(
+                    Lang.T("SettingsImportSuccess"),
+                    Lang.T("SettingsImportTitle"),
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show(
+                    Lang.T("SettingsImportError", ex.Message),
+                    Lang.T("SettingsImportTitle"),
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Error);
+            }
+        }
+
         private void ShowWireGuardLog_Click(object sender, RoutedEventArgs e) =>
             _main.OpenWireGuardLog();
 
@@ -365,7 +519,6 @@ namespace MasselGUARD.Views
                 "TabBtnAppearance"    => "Appearance",
                 "TabBtnRules"         => "Rules",
                 "TabBtnDefaultAction" => "DefaultAction",
-                "TabBtnOpenWifi"      => "OpenWifi",
                 "TabBtnAdvanced"      => "Advanced",
                 "TabBtnAbout"         => "About",
                 _                     => "General",
@@ -380,7 +533,6 @@ namespace MasselGUARD.Views
             PageAppearance.Visibility    = tab == "Appearance"    ? Visibility.Visible : Visibility.Collapsed;
             PageRules.Visibility         = tab == "Rules"         ? Visibility.Visible : Visibility.Collapsed;
             PageDefaultAction.Visibility = tab == "DefaultAction" ? Visibility.Visible : Visibility.Collapsed;
-            PageOpenWifi.Visibility      = tab == "OpenWifi"      ? Visibility.Visible : Visibility.Collapsed;
             PageAdvanced.Visibility      = tab == "Advanced"      ? Visibility.Visible : Visibility.Collapsed;
             PageAbout.Visibility         = tab == "About"         ? Visibility.Visible : Visibility.Collapsed;
 
@@ -389,7 +541,6 @@ namespace MasselGUARD.Views
             TabBtnAppearance.Tag    = tab == "Appearance"    ? "Active" : null;
             TabBtnRules.Tag         = tab == "Rules"         ? "Active" : null;
             TabBtnDefaultAction.Tag = tab == "DefaultAction" ? "Active" : null;
-            TabBtnOpenWifi.Tag      = tab == "OpenWifi"      ? "Active" : null;
             TabBtnAdvanced.Tag      = tab == "Advanced"      ? "Active" : null;
             TabBtnAbout.Tag         = tab == "About"         ? "Active" : null;
 
@@ -399,7 +550,6 @@ namespace MasselGUARD.Views
             if (tab == "General")       { RefreshGroupList(); }
             if (tab == "Rules")         { RefreshAutomationControls(); }
             if (tab == "DefaultAction") { RefreshAutomationControls(); }
-            if (tab == "OpenWifi")      { RefreshAutomationControls(); }
         }
 
         // ── Wizard ───────────────────────────────────────────────────────────
@@ -815,9 +965,6 @@ namespace MasselGUARD.Views
             RefreshThemeInfo(LightThemePicker, LightThemeInfoPanel, LightThemeInfoText);
         }
 
-        // kept for compatibility (old ThemePicker reference removed)
-        private void UpdateThemeFolderLabel() { }
-
         // ── Rules / Default Action / Open Network ─────────────────────────────
         private void RefreshAutomationControls()
         {
@@ -844,29 +991,12 @@ namespace MasselGUARD.Views
             var tunnels = _main.GetTunnelNames();
             if (DefaultTunnelBox != null)
             {
+                _loading = true;
                 DefaultTunnelBox.Items.Clear();
                 foreach (var t in tunnels) DefaultTunnelBox.Items.Add(t);
                 DefaultTunnelBox.Text = cfg.DefaultTunnel ?? "";
+                _loading = false;
             }
-
-            // LAN action radio buttons
-            _loading = true;
-            if (LanActionNone     != null) LanActionNone.IsChecked     = cfg.LanAction == "none"       || string.IsNullOrEmpty(cfg.LanAction);
-            if (LanActionDiscon   != null) LanActionDiscon.IsChecked   = cfg.LanAction == "disconnect";
-            if (LanActionActivate != null) LanActionActivate.IsChecked = cfg.LanAction == "activate";
-            _loading = false;
-
-            // LAN tunnel combobox
-            if (LanTunnelBox != null)
-            {
-                LanTunnelBox.Items.Clear();
-                foreach (var t in tunnels) LanTunnelBox.Items.Add(t);
-                LanTunnelBox.Text = cfg.LanTunnel ?? "";
-            }
-
-            // LAN rules list
-            if (LanRulesListView != null)
-                LanRulesListView.ItemsSource = _main.GetLanRules();
 
             // Open wifi combobox
             _loading = true;
@@ -881,73 +1011,10 @@ namespace MasselGUARD.Views
             }
             _loading = false;
         }
-
-        private void LanRulesListView_SelectionChanged(object sender,
-            System.Windows.Controls.SelectionChangedEventArgs e)
+        private void SaveRules_Click(object sender, RoutedEventArgs e)
         {
-            bool sel = LanRulesListView?.SelectedItem != null;
-            if (EditLanBtn   != null) EditLanBtn.IsEnabled   = sel;
-            if (DeleteLanBtn != null) DeleteLanBtn.IsEnabled = sel;
+            _main.SaveConfigPublic("WiFi rules saved");
         }
-
-        private void AddLanRule_Click(object sender, RoutedEventArgs e)
-        {
-            _main.Dispatcher.Invoke(() => _main.AddLanRulePublic());
-            RefreshAutomationControls();
-        }
-
-        private void EditLanRule_Click(object sender, RoutedEventArgs e)
-        {
-            if (LanRulesListView?.SelectedItem is not TunnelRule rule) return;
-            _main.Dispatcher.Invoke(() => _main.EditLanRulePublic(rule));
-            RefreshAutomationControls();
-        }
-
-        private void DeleteLanRule_Click(object sender, RoutedEventArgs e)
-        {
-            if (LanRulesListView?.SelectedItem is not TunnelRule rule) return;
-            _main.Dispatcher.Invoke(() => _main.DeleteLanRulePublic(rule));
-            RefreshAutomationControls();
-        }
-
-        private void LanAction_Changed(object sender, RoutedEventArgs e)
-        {
-            if (_loading) return;
-            var cfg = _main.GetConfig();
-            if      (LanActionNone.IsChecked   == true) cfg.LanAction = "none";
-            else if (LanActionDiscon.IsChecked == true) cfg.LanAction = "disconnect";
-            else                                        cfg.LanAction = "activate";
-            _main.SaveConfigPublic($"LAN action: {cfg.LanAction}");
-        }
-
-        private void LanTunnelBox_SelectionChanged(object sender,
-            System.Windows.Controls.SelectionChangedEventArgs e)
-        {
-            if (_loading) return;
-            var cfg = _main.GetConfig();
-            if (LanTunnelBox.SelectedItem is string t)
-            {
-                cfg.LanTunnel    = t;
-                cfg.LanAction    = "activate";
-                LanActionActivate.IsChecked = true;
-                _main.SaveConfigPublic($"LAN tunnel: {t}");
-            }
-        }
-
-        private void LanTunnelBox_LostFocus(object sender, RoutedEventArgs e)
-        {
-            if (_loading) return;
-            var cfg  = _main.GetConfig();
-            var text = LanTunnelBox.Text.Trim();
-            if (!string.IsNullOrEmpty(text) && text != cfg.LanTunnel)
-            {
-                cfg.LanTunnel    = text;
-                cfg.LanAction    = "activate";
-                LanActionActivate.IsChecked = true;
-                _main.SaveConfigPublic($"LAN tunnel: {text}");
-            }
-        }
-
         private void DefaultAction_Changed(object sender, RoutedEventArgs e)
         {
             if (_loading) return;
@@ -965,9 +1032,11 @@ namespace MasselGUARD.Views
             var cfg = _main.GetConfig();
             if (DefaultTunnelBox.SelectedItem is string t)
             {
-                cfg.DefaultTunnel    = t;
-                cfg.DefaultAction    = "activate";
+                cfg.DefaultTunnel = t;
+                cfg.DefaultAction = "activate";
+                _loading = true;
                 ActionActivate.IsChecked = true;
+                _loading = false;
                 _main.SaveConfigPublic($"Default tunnel: {t}");
             }
         }
@@ -975,13 +1044,15 @@ namespace MasselGUARD.Views
         private void DefaultTunnelBox_LostFocus(object sender, RoutedEventArgs e)
         {
             if (_loading) return;
-            var cfg = _main.GetConfig();
+            var cfg  = _main.GetConfig();
             var text = DefaultTunnelBox.Text.Trim();
             if (!string.IsNullOrEmpty(text) && text != cfg.DefaultTunnel)
             {
-                cfg.DefaultTunnel    = text;
-                cfg.DefaultAction    = "activate";
+                cfg.DefaultTunnel = text;
+                cfg.DefaultAction = "activate";
+                _loading = true;
                 ActionActivate.IsChecked = true;
+                _loading = false;
                 _main.SaveConfigPublic($"Default tunnel: {text}");
             }
         }

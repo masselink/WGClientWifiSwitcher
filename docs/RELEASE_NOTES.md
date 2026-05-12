@@ -8,26 +8,79 @@ All notable changes are documented here. The most recent release is at the top.
 
 ### Features
 
+**Settings panel redesigned — independent sections**
+The Settings window is now wider (700 px) and has 7 sidebar tabs, each a dedicated full-height page:
+
+| Tab | Contents |
+|---|---|
+| General | Language, app mode, tunnel groups |
+| Appearance | Theme pickers, auto-switch, background notifications |
+| WiFi Rules | Manual mode toggle, SSID rules, open network protection |
+| Default Action | WiFi fallback action + LAN/Ethernet fallback action |
+| LAN Rules | Specific LAN network rules (adapter name or DNS suffix) |
+| Advanced | Install, DLLs, WireGuard, orphans, log level |
+| About | Version, update checker |
+
+Rules, Default Action and Open Network were previously tabs in the main window right panel. They now live in Settings where they belong, leaving the right panel as a clean Activity Log only.
+
+**LAN / Ethernet detection and rules**
+MasselGUARD now monitors Ethernet connections using `NetworkChange.NetworkAvailabilityChanged` and `NetworkAddressChanged`. When an Ethernet adapter comes up it reads:
+- Adapter name (e.g. `"Ethernet"`, `"LAN 2"`)
+- Hardware description
+- DNS suffix (e.g. `"corp.example.com"`, `"office.local"`)
+- Default gateway IP
+
+Specific LAN rules match on adapter name or DNS suffix (partial, case-insensitive). If no specific rule matches, the LAN default action fires as fallback. Both WiFi and LAN default actions are configured on the Default Action tab. LAN-specific network rules are on the LAN Rules tab.
+
+**Pre/post scripts for tunnels**
+Every tunnel (local and WireGuard-linked) can now run `.bat` or `.ps1` scripts at four hook points: before connect, after connect, before disconnect, after disconnect. Scripts are configured in the Edit dialog. For local tunnels an Embed option writes the script content inline into the config (stored as `@embed:...`); for WireGuard tunnels a Browse-only path is stored. Scripts run as the current user; stdout/stderr and exit code are logged.
+
+**Log levels simplified to Normal / Extended**
+Four log levels (Normal, Info, Verbose, Debug) collapsed to two:
+- **Normal** — OK and Warn messages only
+- **Extended** — everything, including `[DBG]` entries
+
+The `service-debug.log` file written to disk is removed. All diagnostic output goes to the in-app activity log only.
+
+**Activity log improvements**
+- Continuation lines (indented detail lines like `[DBG]` entries) now render with a `↳` prefix instead of raw leading spaces, keeping the log visually aligned.
+- Timestamp colour is now themeable via `colorLogTimestamp` in `theme.json`. Falls back to `colorBorder` if not set.
+- Log text area background set to `Transparent` so the parent `Border`'s corner radius renders correctly.
+
+**Tray icon badge counter**
+The tray icon now shows a green badge in the bottom-right corner with the number of active tunnels when one or more tunnels are connected. Shows `9+` for counts above 9.
+
 **High-contrast themes**
-Two new built-in themes with maximum colour contrast and separation: `highcontrast-dark` and `highcontrast-light`. Suited for low-vision users and high-brightness environments.
+Two new built-in themes: `highcontrast-dark` and `highcontrast-light`. Pure black/white backgrounds, full-opacity borders, WCAG AAA compliant colour choices. Corner radius 2 px (near-sharp). Suited for low-vision users and high-brightness environments.
 
 **Single-instance dialog improved**
-When a second instance is launched, the dialog now offers two buttons: **Show running instance** (brings the existing window to the foreground, restores it if minimised) and **Exit** (closes the new instance). Previously only an OK/dismiss button was shown.
+The already-running dialog now shows an informational message explaining how to close the existing instance (right-click tray icon → Exit, or close the main window) and a single Close button. Previously offered a two-button choice that could bring the running instance to front, which was confusing.
 
 **DLL layout reorganised**
 `tunnel.dll` and `wireguard.dll` moved to `wireguard-deps\` subfolder in the source tree. `BUILD.bat` copies from there automatically — no prompt, no choices.
 
 **`BUILD.bat` simplified**
-All download/build DLL options removed. Build simply compiles, copies themes, and copies DLLs from `wireguard-deps\`. If DLLs are missing it points to `tunnelbuild.bat`.
+All download/build DLL options removed. Build simply compiles, copies themes, and copies DLLs from `wireguard-deps\`. If DLLs are missing it points to `tunnelbuild\tunnelbuild.bat`.
 
-**`tunnelbuild.bat` added**
-New script dedicated to obtaining tunnel DLLs: build from source (Go + gcc) or download from GitHub. Outputs to `wireguard-deps\`.
+**`tunnelbuild\` subfolder**
+`tunnelbuild.bat`, `get-wireguard-dlls.ps1`, and `debug-tunnel.ps1` moved to a dedicated `tunnelbuild\` subfolder. `tunnelbuild.bat` builds `tunnel.dll` from source (requires Go + gcc) and places the result in `tunnelbuild\wireguard-deps\`. Download option removed.
 
 **Installer copies all subdirectories**
-When installing over an existing version, all subdirectories (including `theme\`, `lang\`) are now recursively copied and overwritten, ensuring themes are kept current.
+When installing over an existing version, all subdirectories (`theme\`, `lang\`, etc.) are recursively copied and overwritten.
 
 ### Bug fixes
 
+- **Already-running dialog buttons unreadable** — dark text on dark background. Fixed: Show button gets a green-tinted background with matching border; Exit button gets a neutral background with visible border.
+- **Activity log leading spaces** — indented continuation lines (`"  [DBG] ..."`) were inserted verbatim causing uneven spacing. Now stripped and replaced with a styled `↳` marker.
+- **Log corner radius** — `RichTextBox` was drawing its own opaque background, overwriting the parent `Border`'s rounded corners. Fixed by setting `Background="Transparent"` on the `RichTextBox`.
+- **`service-debug.log` written to disk** — `TunnelDll.WriteDebug()` wrote a persistent log file next to the exe. Replaced with no-op; all output routed through the in-app log.
+- **`_loading` CS0414 warning** — `MainWindow._loading` field was set but never read after handlers moved to `SettingsWindow`. Field and both set-sites removed.
+- **`GetConnectedLanAdapters` CS0120** — `LogRaw` called from `static` method. Moved debug log to instance method `OnLanChanged`.
+- **`DeleteRulePublic` CS1061** — method existed for LAN rules but not for WiFi rules. Added.
+- **Duplicate `EditRulePublic` body** — Python replace left trailing duplicate `SaveConfig` + `}` lines. Removed.
+- **Dangling `<summary>` comment** — orphaned XML doc comment left after method deletion caused CS1001/CS1519. Removed.
+- **`MC3000` double comment marker** — Python string replacement duplicated `<!-- ══ APPEARANCE PAGE` in XAML, creating `--` inside a comment. Fixed.
+- **`TunnelDll.WriteDebug` no-op** — body replaced; `WriteDebug` calls remain in the code for compatibility but do nothing.
 
 ---
 
@@ -67,73 +120,23 @@ Each tunnel has a Notes field (shown as a tooltip on the tunnel name in the list
 
 **Theme system — full customisation**
 - Four built-in themes: Default Dark, Default Light, Grey Dark (sharp corners), Grey Light (sharp corners)
-- Theme folders renamed: `default` → `default-dark`, `light` → `default-light`
 - Themes now hot-swap without restart
-- Appearance settings moved to their own **Appearance** tab in Settings
-- Dark and light theme pickers filtered by `type` field — dark picker only shows dark themes
+- Appearance settings moved to their own Appearance tab in Settings
+- Dark and light theme pickers filtered by `type` field
 - Auto-switching based on Windows system theme preference (5-second poll)
-- Theme toggle button in title bar cycles Dark → Light → Auto (⚡)
-
-**Custom window chrome**
-Themes control title bar height, whether the icon and app name are shown, resize grip visibility, and overall window opacity via `theme.json` keys.
-
-**Custom tray menu colours**
-Themes expose `colorTrayBg`, `colorTrayHover`, `colorTrayText`, `colorTrayBorder`, `colorTrayImageMargin`. The `DarkMenuRenderer` reads these from `Application.Resources` at render time — theme hot-swap affects the tray menu immediately.
-
-**Status bar customisation**
-Themes can hide the status bar entirely, control its height, and individually show/hide the WiFi and active tunnel labels.
-
-**Right panel redesign**
-- OPTIONS header added above the tab strip (mirrors TUNNELS header on the left)
-- Both panels are now equal width (`1*` / `10` / `1*`)
-- Tab strip on the right uses the same style as the tunnel category tabs on the left
-- Right tab labels pulled from lang files: Activity Log, Rules, Default Action, Open Network
-- Rules buttons pinned at the bottom of the right panel, always same height as the left button bar
-- Activity Log tab has an **Export Log** button — saves log to a UTF-8 `.txt` file
-- Default Action and Open Network tabs have a card background matching the Log and Rules look
+- Theme toggle button in title bar cycles Dark → Light → Auto
 
 **Detailed activity log**
-- `SaveConfig` replaced with `SaveConfig(string? changeDescription)` — each save logs exactly what changed: `Saved: Rule added: MasselNET → 1.VPN`, `Saved: Default action: activate`, etc.
-- WiFi change logs SSID + security status: `WiFi: HomeNet  🔒 secured` / `⚠ open (no password)`
-- Theme changes, language changes, mode changes, and manual mode toggles all logged at Info level
-- Log level picker now correctly saves all four values: Normal / Info / Verbose / Debug
-
-**Debug logging**
-- Startup summary: OS version, .NET runtime, platform, domain\user
-- Before connecting a local tunnel: Interface address, DNS, Endpoint, AllowedIPs, public key prefix, MTU
-- Connect and disconnect timing in milliseconds
-- WireGuard service name and exe path logged when starting a Companion tunnel
-- All debug entries prefixed `[DBG]` and rendered in a distinct muted colour
-
-**Tunnel discovery log suppression**
-Discovery is logged once at startup. Subsequent calls to `RefreshTunnelDropdowns` (triggered by saves, imports, tab switches) are silent.
-
-**Language flags**
-The language picker now shows country flag emoji before each language name: 🇬🇧 English, 🇳🇱 Dutch, 🇩🇪 German, 🇫🇷 French, 🇪🇸 Spanish. Flags for 13 additional languages pre-mapped for future additions.
+WiFi changes, theme/language/mode changes all logged. Each save logs what changed. Debug entries prefixed `[DBG]` in a distinct muted colour.
 
 **BUILD.bat improvements**
-- Step 3 now copies the `theme\` folder into `dist\` after every successful compile
-- DLL menu extended to four options: `[1]` Use provided DLLs (new — recommended), `[2]` Build from source, `[3]` Download from GitHub, `[4]` Skip
-- `tunnel.dll` and `wireguard.dll` included in the project folder next to `BUILD.bat` so Option 1 works out of the box
-
-**Documentation**
-- `docs/MasselGUARD.md` — full internal documentation (startup sequence, WiFi monitoring, rule evaluation, connect/disconnect flows, security model, theme system, logging, troubleshooting)
-- `docs/changelog.md` — this file
-- `README.md` — streamlined to a feature overview; detail deferred to docs
+Theme folder copied to `dist\` automatically. DLL options menu added.
 
 ### Bug fixes
 
-- **Selection lag / missed clicks** — `RefreshTunnelDropdowns` replaced the entire `ListView.ItemsSource` on every call, which WPF processed as a full reset and silently cleared selection. Fixed: selected tunnel name is saved before rebuild, restored by name-match after `ApplyActiveTab` sets the new source.
-- **Edit button disabled after save** — consequence of the above; now resolved.
-- **`RulesPanel` / `DefaultActionPanel` CS0103** — `ApplyManualMode` referenced old XAML names from the pre-tab era; rewritten to toggle `RTabBtnRules` and `RTabBtnDefault` visibility.
-- **`RightTab_Click` CS1061** — handler was declared in XAML but never implemented in code-behind; added with full `ShowRightTab` state machine.
-- **Duplicate `SaveConfigPublic`** — two definitions introduced in the same session; duplicate removed.
-- **Log level picker saving** — only saved `"normal"` or `"debug"`; now correctly saves all four values.
-- **Border two-children MC3089** — bottom button bar Border had two StackPanel children; wrapped in a Grid.
-- **Tray toast background** — message body Border had no background, making it transparent; `Background="{DynamicResource Surface}"` added.
-- **Appearance tab not opening** — `TabBtn_Click` switch was missing the `"TabBtnAppearance"` case; always routed to General.
-- **Folder subtext removed** — theme picker ComboBox ItemTemplate no longer shows the folder name, only the display name.
-- **`GetConfigStatic` CS1061** — `App.xaml.cs` resolved `MainWindow` as the `Application.MainWindow` property (type `Window`) instead of the class; qualified as `MasselGUARD.MainWindow.GetConfigStatic()`.
+- Selection lag / missed clicks after any save operation
+- Edit button disabled after save
+- Various CS0103, CS1061, duplicate definition, and XAML errors
 
 ---
 
@@ -141,11 +144,11 @@ The language picker now shows country flag emoji before each language name: 🇬
 
 ### Bug fixes
 
-- Orphan warning text overflowed the settings card — replaced horizontal StackPanel with a two-column Grid
-- OpenWifi tunnel selection cleared on every tunnel list refresh — `_loading = true` guard added around ComboBox repopulation
-- Double ✓ / ⚠ prefix in wizard mode status panel — symbols removed from lang strings (added only in code)
+- Orphan warning text overflowed the settings card
+- OpenWifi tunnel selection cleared on every tunnel list refresh
+- Double ✓ / ⚠ prefix in wizard mode status panel
 - Settings window height increased for wrapped checkbox text
-- Tray toast duration increased to 6 seconds; font size increased to 15 pt; app icon shown in header
+- Tray toast duration increased to 6 seconds; font size increased to 15 pt
 
 ---
 
@@ -153,81 +156,26 @@ The language picker now shows country flag emoji before each language name: 🇬
 
 ### Features
 
-**Setup wizard**
-First-run wizard covers language, operating mode, and automation mode. Re-runnable from the **⊞ Wizard** button at the bottom of the Settings sidebar. Changes applied on Finish; Skip discards everything.
-
-**Tabbed Settings window**
-Sidebar with General / Advanced / About tabs. All settings deferred to Save button.
-
-**Tray popup notifications**
-Branded toast near the tray when a tunnel switches while the window is hidden. Shows tunnel name, reason, and fades after 6 seconds. Toggle in Settings → Advanced.
-
-**Open network protection**
-Separate section in Default Action. Selected tunnel activates on any open (passwordless) WiFi before rules are evaluated.
-
-**Orphaned service cleanup**
-Settings → Advanced shows `WireGuardTunnel$` SCM entries left behind after a crash. List, inspect, and remove them individually or all at once. Startup warning logged if orphans found.
-
-**Quick Connect in tunnel list**
-Active Quick Connect session appears as `⚡ <n>` at the top of the tunnel list and can be disconnected from there.
-
-**Delete / Unlink / Remove morphing button**
-Tunnel action button label changes based on selection: Delete (local, file present), Remove (local, file missing), Unlink WireGuard profile (Companion-linked tunnel). Hidden when nothing is selected.
-
-**Language support**
-Added 🇩🇪 German, 🇫🇷 French, 🇪🇸 Spanish. Flag emoji in language picker.
-
-### Improvements
-
-- `SafeName()` sanitises tunnel names for SCM and filesystem use
-- Version checker uses GitHub `/tags` API; running ahead shows a witty message
-- Quick Connect supports `.conf.dpapi` files
-- Import from file shows `.conf` and `.conf.dpapi` as separate filter entries
-- "Link to WireGuard profile" replaces "Import from WireGuard"; hidden in Standalone mode
-- "Don't ask again" checkbox on the portable update prompt; reset toggle in Settings → Advanced
-- Service polling accepts Running or Stopped (50 ms loop) — eliminates false-positive Event Viewer error from wireguard-NT's fast-exit behaviour
-- Temp config deleted immediately after service creation
-- Tray toast: app icon, 15 pt font, 6-second display
-
-### Bug fixes
-
-- Settings Advanced/About tabs not switching (Tag overwritten by highlight styling)
-- Manual mode tunnel list not filling full height
-- OpenWifi selection cleared on tunnel list refresh
-- Double ✓ / ⚠ in wizard status panel
-- `_firstRun` in wrong scope (CS0103 in static method)
-- Missing `List<>` / `ToList()` usings in SettingsWindow
-- `FileStream` 7-argument constructor removed in .NET 6+ — replaced with `File.Create` + `SetAccessControl`
+- Setup wizard (first-run and re-runnable)
+- Tabbed Settings window: General / Advanced / About
+- Tray popup notifications with reason context
+- Open network protection
+- Orphaned service cleanup in Settings → Advanced
+- Quick Connect in the active tunnel list
+- Delete / Unlink / Remove morphing toolbar button
+- German, French, Spanish language support
 
 ---
 
 ## v2.1
 
-- DPAPI encryption for tunnel configs (`CurrentUser` scope), stored as `.conf.dpapi`
-- Atomic temp file creation: `FileSecurity` applied before first byte is written
-- Temp file deleted immediately after service starts
-- `SvcTempDir` in `<ExeDir>\tunnels\temp\`
+- DPAPI encryption for tunnel configs
+- Atomic temp file creation with FileSecurity
 - Tunnel storage in `<ExeDir>\tunnels\`
-- `SafeName()` service name sanitisation
-- Quick Connect button moved to status bar (right-aligned)
-- WireGuard Log button visible only when a WireGuard tunnel is active
-- `SuppressPortableUpdatePrompt` config option
 - GitHub tags API for version checking
 
 ---
 
 ## v2.0
 
-Initial release.
-
-- Standalone mode: WireGuard-NT via `tunnel.dll` + `wireguard.dll`
-- Companion mode: automates official WireGuard for Windows
-- Mixed mode: both simultaneously
-- WiFi auto-switching via `WlanRegisterNotification` (no polling)
-- WiFi rules: SSID → tunnel or SSID → disconnect
-- Default action: none / disconnect all / activate named tunnel
-- Quick Connect: open any `.conf` and connect without importing
-- System tray: dark context menu, coloured dot when connected
-- Single-instance guard, admin elevation, UAC manifest
-- 🇬🇧 English and 🇳🇱 Dutch
-- Dark theme, frameless WPF window
+Initial release. Standalone, Companion and Mixed modes. WiFi auto-switching via `WlanRegisterNotification`. WiFi rules, default action, Quick Connect, system tray, single-instance guard, English and Dutch.

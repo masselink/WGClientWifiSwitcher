@@ -1,6 +1,10 @@
 @echo off
 title MasselGUARD -- Tunnel DLL Builder
 setlocal enabledelayedexpansion
+
+rem ── Opt out of .NET CLI telemetry ────────────────────────────────────────────
+set DOTNET_CLI_TELEMETRY_OPTOUT=1
+set DOTNET_NOLOGO=1
 echo.
 echo  ====================================
 echo       MasselGUARD -- Tunnel DLL

@@ -187,7 +187,6 @@ namespace MasselGUARD
     {
         public List<TunnelRule>   Rules              { get; set; } = new();
         /// <summary>LAN/Ethernet-specific rules. Each rule matches on AdapterFilter (adapter name or DNS suffix).</summary>
-        public List<TunnelRule>   LanRules           { get; set; } = new();
         public List<StoredTunnel> Tunnels            { get; set; } = new();
         /// <summary>User-defined tunnel groups. Order is preserved in the UI.</summary>
         public List<TunnelGroup>  TunnelGroups       { get; set; } = new()
@@ -198,8 +197,6 @@ namespace MasselGUARD
         };
         public string             DefaultAction      { get; set; } = "none";
         public string             DefaultTunnel      { get; set; } = "";
-        public string             LanAction          { get; set; } = "none";
-        public string             LanTunnel          { get; set; } = "";
         public string             InstallDirectory   { get; set; } = @"C:\Program Files\WireGuard";
         public string             Language           { get; set; } = "en";
         public string?            InstalledPath      { get; set; } = null;
@@ -389,14 +386,12 @@ namespace MasselGUARD
         private static bool _firstRun = false;   // set by LoadConfig when no config file exists
         private bool _startupComplete = false;   // suppress verbose discovery log after startup
         private readonly ObservableCollection<TunnelRule>  _rules    = new();
-        private readonly ObservableCollection<TunnelRule>  _lanRules = new();
         private readonly ObservableCollection<TunnelEntry> _tunnels = new();
         private string? _lastWifi;
         private TunnelEntry? _selectedTunnel;      // tracks selection across grouped panel
         private readonly DispatcherTimer _timer = new();
         private Ringlogger?              _ringlogger;
         private string                   _ringloggerTunnel = "";
-        private bool _loading = false;
 
         // WireGuard executable — derived from configured install directory
         private static string WgExe => _cfg.WgExePath;
@@ -611,7 +606,6 @@ namespace MasselGUARD
 
                 UpdateAdminLabel();
                 UpdateFooterLabel();
-                ShowRightTab("Log");    // initialise right panel — Log is default
                 var startedFrom = Environment.ProcessPath ?? AppContext.BaseDirectory;
 
                 // Startup summary — always logged at Info so it appears at default level
@@ -772,7 +766,6 @@ namespace MasselGUARD
 
             // Register for instant WiFi change notifications via WlanApi
             RegisterWifiEvents();
-            RegisterLanEvents();
 
             // Set initial state — detect WiFi and apply rules immediately
             var wifi = GetCurrentSsid();
@@ -892,140 +885,6 @@ namespace MasselGUARD
                 Log("LogWlanActive", LogLevel.Ok);
             }
             catch (Exception ex) { Log("LogWlanError", LogLevel.Warn, ex.Message); }
-        }
-
-        // ── LAN detection ────────────────────────────────────────────────────
-
-        /// <summary>
-        /// Describes a connected Ethernet adapter with its identifiable properties.
-        /// </summary>
-        private record LanAdapter(
-            string Name,          // Windows adapter name e.g. "Ethernet", "LAN 2"
-            string Description,   // hardware description e.g. "Intel(R) Ethernet..."
-            string DnsSuffix,     // DNS domain suffix e.g. "corp.example.com", "" if none
-            string GatewayIp);    // default gateway IP, "" if none
-
-        private readonly List<LanAdapter> _lastLanAdapters = new();
-
-        private static List<LanAdapter> GetConnectedLanAdapters()
-        {
-            var result = new List<LanAdapter>();
-            foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
-            {
-                if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
-                if (ni.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Ethernet) continue;
-                if (ni.Description.Contains("WireGuard", StringComparison.OrdinalIgnoreCase)) continue;
-                if (ni.Description.Contains("Loopback",  StringComparison.OrdinalIgnoreCase)) continue;
-                if (ni.Description.Contains("Virtual",   StringComparison.OrdinalIgnoreCase)) continue;
-
-                var props      = ni.GetIPProperties();
-                var dnsSuffix  = props.DnsSuffix ?? "";
-                var gateway    = props.GatewayAddresses
-                    .Select(g => g.Address.ToString())
-                    .FirstOrDefault(g => !g.StartsWith("fe80", StringComparison.OrdinalIgnoreCase))
-                    ?? "";
-
-                result.Add(new LanAdapter(ni.Name, ni.Description, dnsSuffix, gateway));
-            }
-            return result;
-        }
-
-        private static bool IsLanConnected() => GetConnectedLanAdapters().Count > 0;
-
-        private void RegisterLanEvents()
-        {
-            _lastLanAdapters.Clear();
-            _lastLanAdapters.AddRange(GetConnectedLanAdapters());
-            System.Net.NetworkInformation.NetworkChange.NetworkAvailabilityChanged += (_, _) =>
-                Dispatcher.BeginInvoke(new Action(OnLanChanged));
-            System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += (_, _) =>
-                Dispatcher.BeginInvoke(new Action(OnLanChanged));
-        }
-
-        private void OnLanChanged()
-        {
-            var current = GetConnectedLanAdapters();
-
-            // Debug: log all current adapters
-            foreach (var a in current)
-                LogRaw($"  [DBG] LAN adapter: name='{a.Name}' dns='{a.DnsSuffix}' gw='{a.GatewayIp}'", LogLevel.Debug);
-
-            // Find newly connected adapters
-            foreach (var adapter in current)
-            {
-                bool wasPresent = _lastLanAdapters.Any(a =>
-                    string.Equals(a.Name, adapter.Name, StringComparison.OrdinalIgnoreCase));
-                if (!wasPresent)
-                {
-                    var display = string.IsNullOrEmpty(adapter.DnsSuffix)
-                        ? adapter.Name
-                        : $"{adapter.Name} ({adapter.DnsSuffix})";
-                    LogRaw($"LAN: connected — {display}", LogLevel.Info);
-                    if (!_cfg.ManualMode) ApplyLanRules(adapter);
-                }
-            }
-
-            // Find disconnected adapters
-            foreach (var adapter in _lastLanAdapters)
-            {
-                bool stillPresent = current.Any(a =>
-                    string.Equals(a.Name, adapter.Name, StringComparison.OrdinalIgnoreCase));
-                if (!stillPresent)
-                    LogRaw($"LAN: disconnected — {adapter.Name}", LogLevel.Info);
-            }
-
-            _lastLanAdapters.Clear();
-            _lastLanAdapters.AddRange(current);
-        }
-
-        /// <summary>
-        /// Matches a connected adapter against LAN rules by checking adapter name
-        /// or DNS suffix (case-insensitive, partial match). Falls back to LanAction/LanTunnel.
-        /// </summary>
-        private void ApplyLanRules(LanAdapter adapter)
-        {
-            // 1. Check specific LAN rules — match on name or DNS suffix
-            foreach (var rule in _cfg.LanRules)
-            {
-                var filter = rule.AdapterFilter?.Trim() ?? "";
-                if (string.IsNullOrEmpty(filter)) continue;
-
-                bool nameMatch = adapter.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)
-                              || adapter.Description.Contains(filter, StringComparison.OrdinalIgnoreCase);
-                bool dnsMatch  = !string.IsNullOrEmpty(adapter.DnsSuffix)
-                              && adapter.DnsSuffix.Contains(filter, StringComparison.OrdinalIgnoreCase);
-
-                if (nameMatch || dnsMatch)
-                {
-                    if (string.IsNullOrEmpty(rule.Tunnel))
-                    {
-                        LogRaw($"LAN rule '{filter}': disconnect all", LogLevel.Info);
-                        DisconnectAll(Lang.T("TrayReasonDefault"));
-                    }
-                    else
-                    {
-                        LogRaw($"LAN rule '{filter}': activate {rule.Tunnel}", LogLevel.Info);
-                        SwitchTo(rule.Tunnel, Lang.T("TrayReasonDefault"));
-                    }
-                    return;
-                }
-            }
-
-            // 2. Fall back to generic LAN action
-            switch (_cfg.LanAction)
-            {
-                case "disconnect":
-                    LogRaw($"LAN default action: disconnect", LogLevel.Info);
-                    DisconnectAll(Lang.T("TrayReasonDefault"));
-                    break;
-                case "activate" when !string.IsNullOrEmpty(_cfg.LanTunnel):
-                    LogRaw($"LAN default action: activate {_cfg.LanTunnel}", LogLevel.Info);
-                    SwitchTo(_cfg.LanTunnel, Lang.T("TrayReasonDefault"));
-                    break;
-                default:
-                    LogRaw("LAN: no action configured", LogLevel.Info);
-                    break;
-            }
         }
 
         // ── Rule logic ───────────────────────────────────────────────────────
@@ -1688,7 +1547,6 @@ namespace MasselGUARD
 
         private void LoadConfig()
         {
-            _loading = true;
             try
             {
                 if (File.Exists(ConfigPath))
@@ -1698,7 +1556,7 @@ namespace MasselGUARD
                 }
                 else
                 {
-                    _firstRun = true;   // no config found — show wizard after load
+                    _firstRun = true;
                 }
             }
             catch (Exception ex)
@@ -1710,11 +1568,8 @@ namespace MasselGUARD
             {
                 _rules.Clear();
                 foreach (var r in _cfg.Rules) _rules.Add(r);
-                _lanRules.Clear();
-                foreach (var r in _cfg.LanRules) _lanRules.Add(r);
 
                 RefreshTunnelDropdowns();
-                _loading = false;
             }
         }
 
@@ -1726,8 +1581,19 @@ namespace MasselGUARD
                 Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
                 File.WriteAllText(ConfigPath,
                     JsonSerializer.Serialize(_cfg, new JsonSerializerOptions { WriteIndented = true }));
+
+                // Normal: always show "Settings saved" when called without description
+                // Extended: always show the specific change detail
                 if (!string.IsNullOrEmpty(changeDescription))
+                {
+                    // Always show change detail at Ok level (visible in Normal + Extended)
                     LogRaw($"Saved: {changeDescription}", LogLevel.Ok);
+                }
+                else
+                {
+                    // Silent save (e.g. on tunnel connect) — only log in Extended
+                    LogRaw("Settings saved.", LogLevel.Debug);
+                }
             }
             catch (Exception ex)
             {
@@ -1737,7 +1603,6 @@ namespace MasselGUARD
         }
 
         // ── UI events ──────────────────────────────────────────────────────────
-
 
 
         // ── Tunnel management ──────────────────────────────────────────────────
@@ -2703,16 +2568,6 @@ namespace MasselGUARD
         /// <summary>Shows/hides the rules and default-action panels based on ManualMode.</summary>
         internal void ApplyManualMode()
         {
-            bool manual = _cfg.ManualMode;
-
-            // In manual mode hide the Rules and Default Action right-panel tabs;
-            // show them again when automation is re-enabled.
-            // Rules/Default tabs removed (moved to Settings)
-
-            // If the currently-active tab is now hidden, fall back to Log
-            if (manual && (_activeRightTab == "Rules" || _activeRightTab == "Default"))
-                ShowRightTab("Log");
-
             UpdateFooterLabel();
         }
 
@@ -3975,20 +3830,6 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
 
         private Views.SettingsWindow? _settingsWindow;
 
-        // ── Right-panel tab switching ─────────────────────────────────────────
-        private string _activeRightTab = "Log";
-
-        private void RightTab_Click(object sender, RoutedEventArgs e)
-        {
-            if (sender is System.Windows.Controls.Button btn && btn.Tag is string tab)
-                ShowRightTab(tab);
-        }
-
-        private void ShowRightTab(string tab)
-        {
-            // Right panel is log-only; Rules/Default/OpenWifi moved to Settings
-            _activeRightTab = "Log";
-        }
 
         private void ExportLog_Click(object sender, RoutedEventArgs e)
         {
@@ -4112,16 +3953,16 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
         public void   SaveConfigPublic()         => SaveConfig();
         public void   SaveConfigPublic(string desc) => SaveConfig(desc);
         public System.Collections.ObjectModel.ObservableCollection<TunnelRule> GetRules()    => _rules;
-        public System.Collections.ObjectModel.ObservableCollection<TunnelRule> GetLanRules() => _lanRules;
         public List<string> GetTunnelNames()     => _tunnels.Select(t => t.Name).ToList();
 
         public void AddRulePublic()
         {
             var dlg = new Views.RuleDialog(GetCurrentSsid(), tunnels: GetAvailableTunnels()) { Owner = this };
             if (dlg.ShowDialog() != true) return;
-            _rules.Add(new TunnelRule { Ssid = dlg.ResultSsid, Tunnel = dlg.ResultTunnel });
-            var target = string.IsNullOrEmpty(dlg.ResultTunnel) ? Lang.T("TunnelBtnDisconnect") : dlg.ResultTunnel;
-            SaveConfig($"Rule added: {dlg.ResultSsid} → {target}");
+            var rule = new TunnelRule { Ssid = dlg.ResultSsid, Tunnel = dlg.ResultTunnel };
+            _rules.Add(rule);
+            _cfg.Rules = _rules.ToList();
+            // saved by caller
         }
 
         public void EditRulePublic(TunnelRule rule)
@@ -4130,41 +3971,13 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
             if (dlg.ShowDialog() != true) return;
             rule.Ssid   = dlg.ResultSsid;
             rule.Tunnel = dlg.ResultTunnel;
-            var target = string.IsNullOrEmpty(dlg.ResultTunnel) ? Lang.T("TunnelBtnDisconnect") : dlg.ResultTunnel;
-            SaveConfig($"Rule updated: {dlg.ResultSsid} → {target}");
+            _cfg.Rules = _rules.ToList();
         }
 
         public void DeleteRulePublic(TunnelRule rule)
         {
             _rules.Remove(rule);
-            _cfg.Rules.Remove(rule);
-            SaveConfig($"Rule deleted: {rule.Ssid}");
-        }
-
-        public void AddLanRulePublic()
-        {
-            var dlg = new Views.LanRuleDialog(GetAvailableTunnels()) { Owner = this };
-            if (dlg.ShowDialog() != true) return;
-            var rule = new TunnelRule { AdapterFilter = dlg.ResultFilter, Tunnel = dlg.ResultTunnel, NetworkType = "ethernet" };
-            _lanRules.Add(rule);
-            _cfg.LanRules.Add(rule);
-            SaveConfig($"LAN rule added: {dlg.ResultFilter}");
-        }
-
-        public void EditLanRulePublic(TunnelRule rule)
-        {
-            var dlg = new Views.LanRuleDialog(GetAvailableTunnels(), rule.AdapterFilter, rule.Tunnel) { Owner = this };
-            if (dlg.ShowDialog() != true) return;
-            rule.AdapterFilter = dlg.ResultFilter;
-            rule.Tunnel        = dlg.ResultTunnel;
-            SaveConfig($"LAN rule updated: {dlg.ResultFilter}");
-        }
-
-        public void DeleteLanRulePublic(TunnelRule rule)
-        {
-            _lanRules.Remove(rule);
-            _cfg.LanRules.Remove(rule);
-            SaveConfig($"LAN rule deleted: {rule.AdapterFilter}");
+            _cfg.Rules = _rules.ToList();
         }
         public void   SetMode(AppMode mode)
         {

@@ -322,7 +322,7 @@
 
                         <!-- ACTIVITY LOG header -->
                         <Grid Grid.Row="0" Margin="0,0,0,4">
-                            <TextBlock Text="{Binding [RTabLog], Source={x:Static local:Lang.Instance}}"
+                            <TextBlock Text="{Binding [ActivityLogHeader], Source={x:Static local:Lang.Instance}}"
                                        Style="{StaticResource SectionLabel}" Margin="0"/>
                         </Grid>
 
