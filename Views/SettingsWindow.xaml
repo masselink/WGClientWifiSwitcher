@@ -53,6 +53,8 @@
                         <StackPanel Grid.Row="0" Margin="0,12,0,0">
                             <Button x:Name="TabBtnGeneral"       Style="{StaticResource SideTabBtn}" Click="TabBtn_Click" Tag="General"
                                     Content="{Binding [SettingsTabGeneral],       Source={x:Static local:Lang.Instance}}"/>
+                            <Button x:Name="TabBtnGroups"        Style="{StaticResource SideTabBtn}" Click="TabBtn_Click" Tag="Groups"
+                                    Content="{Binding [SettingsTabGroups],        Source={x:Static local:Lang.Instance}}"/>
                             <Button x:Name="TabBtnAppearance"    Style="{StaticResource SideTabBtn}" Click="TabBtn_Click" Tag="Appearance"
                                     Content="{Binding [SettingsTabAppearance],    Source={x:Static local:Lang.Instance}}"/>
                             <Button x:Name="TabBtnDefaultAction" Style="{StaticResource SideTabBtn}" Click="TabBtn_Click" Tag="DefaultAction"
@@ -166,19 +168,22 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- Tunnel groups -->
-                            <TextBlock Text="{Binding [SettingsSectionGroups], Source={x:Static local:Lang.Instance}}"
+
+
+                        </StackPanel>
+
+                        <!-- ══ GROUPS PAGE ══════════════════════════ -->
+                        <StackPanel x:Name="PageGroups" Visibility="Collapsed">
+
+                            <!-- Page title -->
+                            <TextBlock Text="{Binding [SettingsTabGroups], Source={x:Static local:Lang.Instance}}"
                                        Style="{StaticResource SettingsSectionHeader}"/>
-                            <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,4">
+
+                            <!-- Group list + add row (top) -->
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,12">
                                 <StackPanel>
-                                    <TextBlock Text="{Binding [SettingsGroupsDesc], Source={x:Static local:Lang.Instance}}"
-                                               FontFamily="{DynamicResource Theme.FontFamily}" FontSize="9"
-                                               Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap"
-                                               Margin="0,0,0,8"/>
-                                    <!-- Group list -->
-                                    <ItemsControl x:Name="GroupListPanel"/>
-                                    <!-- Add new group row -->
-                                    <Grid Margin="0,8,0,0">
+                                    <!-- Add new group row at top -->
+                                    <Grid Margin="0,0,0,10">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
@@ -195,19 +200,110 @@
                                                 Style="{StaticResource SuccessBtn}" FontSize="10" Padding="10,5"
                                                 Click="AddGroup_Click"/>
                                     </Grid>
+                                    <!-- Group list -->
+                                    <ItemsControl x:Name="GroupListPanel"/>
                                 </StackPanel>
                             </Border>
 
+                            <!-- Display toggles (below) -->
+                            <TextBlock Text="{Binding [SettingsSectionDisplay], Source={x:Static local:Lang.Instance}}"
+                                       Style="{StaticResource SettingsSectionHeader}"/>
+
+                            <!-- Always hide tunnel count toggle -->
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,4">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="{Binding [SettingsHideTunnelCount], Source={x:Static local:Lang.Instance}}"
+                                                   FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"
+                                                   Foreground="{DynamicResource TextPrimary}"/>
+                                        <TextBlock Text="{Binding [SettingsHideTunnelCountDesc], Source={x:Static local:Lang.Instance}}"
+                                                   FontFamily="{DynamicResource Theme.FontFamily}" FontSize="9"
+                                                   Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <ToggleButton Grid.Column="1" x:Name="HideTunnelCountToggle"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Checked="HideTunnelCount_Changed"
+                                                  Unchecked="HideTunnelCount_Changed"
+                                                  VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+
+                            <!-- Hide empty tunnel groups toggle -->
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,4">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="{Binding [SettingsHideEmptyGroups], Source={x:Static local:Lang.Instance}}"
+                                                   FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"
+                                                   Foreground="{DynamicResource TextPrimary}"/>
+                                        <TextBlock Text="{Binding [SettingsHideEmptyGroupsDesc], Source={x:Static local:Lang.Instance}}"
+                                                   FontFamily="{DynamicResource Theme.FontFamily}" FontSize="9"
+                                                   Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <ToggleButton Grid.Column="1" x:Name="HideEmptyGroupsToggle"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Checked="HideEmptyGroups_Changed"
+                                                  Unchecked="HideEmptyGroups_Changed"
+                                                  VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
 
                         </StackPanel>
 
                         <!-- ══ WIFI RULES PAGE ══════════════════════════ -->
                         <StackPanel x:Name="PageRules" Visibility="Collapsed">
 
-                            <!-- Manual mode toggle -->
+                            <!-- Rules list (top) -->
+                            <TextBlock Text="{Binding [SettingsSectionRules], Source={x:Static local:Lang.Instance}}"
+                                       Style="{StaticResource SettingsSectionHeader}"/>
+                            <StackPanel x:Name="AutomationPanel">
+                                <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,4">
+                                    <StackPanel>
+                                        <ListView x:Name="RulesListView" MinHeight="60" MaxHeight="220"
+                                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                  SelectionChanged="RulesListView_SelectionChanged"
+                                                  BorderThickness="0">
+                                            <ListView.View>
+                                                <GridView>
+                                                    <GridViewColumn Header="{Binding [RuleColSsid], Source={x:Static local:Lang.Instance}}"
+                                                                    Width="180" DisplayMemberBinding="{Binding Ssid}"/>
+                                                    <GridViewColumn Header="{Binding [RuleColTunnel], Source={x:Static local:Lang.Instance}}"
+                                                                    Width="180" DisplayMemberBinding="{Binding TunnelDisplay}"/>
+                                                </GridView>
+                                            </ListView.View>
+                                        </ListView>
+                                    </StackPanel>
+                                </Border>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                    <Button Content="{Binding [BtnAddRule], Source={x:Static local:Lang.Instance}}"
+                                            Style="{StaticResource SuccessBtn}" FontSize="10" Padding="10,3"
+                                            Click="AddRule_Click"/>
+                                    <Button Content="{Binding [BtnEditRule], Source={x:Static local:Lang.Instance}}"
+                                            Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
+                                            Margin="6,0,0,0" Click="EditRule_Click"
+                                            x:Name="EditBtn" IsEnabled="False"/>
+                                    <Button Content="{Binding [BtnDeleteRule], Source={x:Static local:Lang.Instance}}"
+                                            Style="{StaticResource DangerBtn}" FontSize="10" Padding="10,3"
+                                            Margin="6,0,0,0" Click="DeleteRule_Click"
+                                            x:Name="DeleteBtn" IsEnabled="False"/>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <!-- Automation settings (below rules) -->
                             <TextBlock Text="{Binding [SettingsSectionMode], Source={x:Static local:Lang.Instance}}"
                                        Style="{StaticResource SettingsSectionHeader}"/>
-                            <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,8">
+
+                            <!-- Disable WiFi rules toggle -->
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,4">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -228,54 +324,53 @@
                                 </Grid>
                             </Border>
 
-                            <!-- Rules content — disabled when manual mode is on -->
-                            <StackPanel x:Name="AutomationPanel">
-
-                                <!-- Info block -->
-                                <TextBlock Text="{Binding [SettingsSectionRules], Source={x:Static local:Lang.Instance}}"
-                                           Style="{StaticResource SettingsSectionHeader}"/>
-                                <Border Background="{DynamicResource Surface}"
-                                        BorderBrush="{DynamicResource BorderColor}" BorderThickness="1"
-                                        CornerRadius="{DynamicResource Theme.CornerRadius}"
-                                        Padding="10,8" Margin="0,0,0,6">
-                                    <TextBlock Text="{Binding [SettingsRulesInfo], Source={x:Static local:Lang.Instance}}"
-                                               FontFamily="{DynamicResource Theme.FontFamily}" FontSize="9"
-                                               Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap"/>
-                                </Border>
-                                <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,4">
-                                    <StackPanel>
-                                        <ListView x:Name="RulesListView" MinHeight="60" MaxHeight="220"
-                                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                                  SelectionChanged="RulesListView_SelectionChanged"
-                                                  BorderThickness="0">
-                                            <ListView.View>
-                                                <GridView>
-                                                    <GridViewColumn Header="{Binding [RuleColSsid], Source={x:Static local:Lang.Instance}}"
-                                                                    Width="180" DisplayMemberBinding="{Binding Ssid}"/>
-                                                    <GridViewColumn Header="{Binding [RuleColTunnel], Source={x:Static local:Lang.Instance}}"
-                                                                    Width="180" DisplayMemberBinding="{Binding TunnelDisplay}"/>
-                                                </GridView>
-                                            </ListView.View>
-                                        </ListView>
+                            <!-- Hide WiFi rules on main window toggle -->
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,4,0,0">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="{Binding [SettingsHideWifiRules], Source={x:Static local:Lang.Instance}}"
+                                                   FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"
+                                                   Foreground="{DynamicResource TextPrimary}"/>
+                                        <TextBlock Text="{Binding [SettingsHideWifiRulesDesc], Source={x:Static local:Lang.Instance}}"
+                                                   FontFamily="{DynamicResource Theme.FontFamily}" FontSize="9"
+                                                   Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap"
+                                                   Margin="0,2,0,0"/>
                                     </StackPanel>
-                                </Border>
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                    <Button Content="{Binding [BtnAddRule], Source={x:Static local:Lang.Instance}}"
-                                            Style="{StaticResource SuccessBtn}" FontSize="10" Padding="10,3"
-                                            Click="AddRule_Click"/>
-                                    <Button Content="{Binding [BtnEditRule], Source={x:Static local:Lang.Instance}}"
-                                            Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
-                                            Margin="6,0,0,0" Click="EditRule_Click"
-                                            x:Name="EditBtn" IsEnabled="False"/>
-                                    <Button Content="{Binding [BtnDeleteRule], Source={x:Static local:Lang.Instance}}"
-                                            Style="{StaticResource DangerBtn}" FontSize="10" Padding="10,3"
-                                            Margin="6,0,0,0" Click="DeleteRule_Click"
-                                            x:Name="DeleteBtn" IsEnabled="False"/>
-                                    <Button Content="{Binding [BtnSave], Source={x:Static local:Lang.Instance}}"
-                                            Style="{StaticResource PrimaryBtn}" FontSize="10" Padding="10,3"
-                                            Margin="18,0,0,0" Click="SaveRules_Click"/>
-                                </StackPanel>
-                            </StackPanel>
+                                    <ToggleButton Grid.Column="1" x:Name="HideWifiRulesToggle"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Checked="HideWifiRules_Changed"
+                                                  Unchecked="HideWifiRules_Changed"
+                                                  VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+
+                            <!-- Show rules column toggle -->
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,4,0,0">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="{Binding [SettingsShowRulesColumn], Source={x:Static local:Lang.Instance}}"
+                                                   FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"
+                                                   Foreground="{DynamicResource TextPrimary}"/>
+                                        <TextBlock Text="{Binding [SettingsShowRulesColumnDesc], Source={x:Static local:Lang.Instance}}"
+                                                   FontFamily="{DynamicResource Theme.FontFamily}" FontSize="9"
+                                                   Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <ToggleButton Grid.Column="1" x:Name="ShowRulesColumnToggle"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Checked="ShowRulesColumn_Changed"
+                                                  Unchecked="ShowRulesColumn_Changed"
+                                                  VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
 
                         </StackPanel>
 
@@ -394,6 +489,22 @@
                                                   Checked="TrayPopup_Changed" Unchecked="TrayPopup_Changed"/>
                                 </Grid>
                             </Border>
+                            <!-- Notification duration -->
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,4">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding [SettingsNotifDuration], Source={x:Static local:Lang.Instance}}"
+                                               FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"
+                                               Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                                    <ComboBox Grid.Column="1" x:Name="NotifDurationPicker"
+                                              Width="80" FontSize="11" Margin="12,0,0,0"
+                                              SelectionChanged="NotifDuration_Changed"/>
+                                </Grid>
+                            </Border>
 
                             <!-- Dark theme -->
                             <TextBlock Text="{Binding [SettingsThemeDarkLabel], Source={x:Static local:Lang.Instance}}"
@@ -445,26 +556,6 @@
 
                         <!-- ══ ADVANCED PAGE ══════════════════════════════════ -->
                         <StackPanel x:Name="PageAdvanced" Visibility="Collapsed">
-
-                            <!-- WireGuard client -->
-                            <TextBlock x:Name="WireGuardSectionLabel"
-                                       Text="{Binding [SettingsSectionWireGuard], Source={x:Static local:Lang.Instance}}"
-                                       Style="{StaticResource SettingsSectionHeader}"/>
-                            <Border x:Name="WireGuardSectionCard" Style="{StaticResource SettingsCard}" Margin="0,0,0,16">
-                                <StackPanel>
-                                    <TextBlock Text="{Binding [SettingsWireGuardDesc], Source={x:Static local:Lang.Instance}}"
-                                               FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10" Foreground="{DynamicResource TextMuted}"
-                                               TextWrapping="Wrap" Margin="0,0,0,10"/>
-                                    <StackPanel Orientation="Horizontal">
-                                        <Button Content="{Binding [BtnOpenWireGuard], Source={x:Static local:Lang.Instance}}"
-                                                Style="{StaticResource FlatBtn}" FontSize="10" Padding="12,6" Margin="0,0,8,0"
-                                                Click="OpenWireGuard_Click"/>
-                                        <Button Content="{Binding [BtnShowLog], Source={x:Static local:Lang.Instance}}"
-                                                Style="{StaticResource FlatBtn}" FontSize="10" Padding="12,6"
-                                                Click="ShowWireGuardLog_Click"/>
-                                    </StackPanel>
-                                </StackPanel>
-                            </Border>
 
                             <!-- Import / Export -->
                             <TextBlock Text="{Binding [SettingsImportExportSection], Source={x:Static local:Lang.Instance}}"
@@ -540,6 +631,47 @@
                                 </Grid>
                             </Border>
 
+                            <!-- Start with Windows toggle -->
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,4">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="{Binding [SettingsStartWithWindows], Source={x:Static local:Lang.Instance}}"
+                                                   FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11"
+                                                   Foreground="{DynamicResource TextPrimary}"/>
+                                        <TextBlock Text="{Binding [SettingsStartWithWindowsDesc], Source={x:Static local:Lang.Instance}}"
+                                                   FontFamily="{DynamicResource Theme.FontFamily}" FontSize="9"
+                                                   Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <ToggleButton Grid.Column="1" x:Name="StartWithWindowsToggle"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Checked="StartWithWindows_Changed"
+                                                  Unchecked="StartWithWindows_Changed"
+                                                  VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+
+                            <!-- WireGuard client -->
+                            <TextBlock x:Name="WireGuardSectionLabel"
+                                       Text="{Binding [SettingsSectionWireGuard], Source={x:Static local:Lang.Instance}}"
+                                       Style="{StaticResource SettingsSectionHeader}"/>
+                            <Border x:Name="WireGuardSectionCard" Style="{StaticResource SettingsCard}" Margin="0,0,0,16">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding [SettingsWireGuardDesc], Source={x:Static local:Lang.Instance}}"
+                                               FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10" Foreground="{DynamicResource TextMuted}"
+                                               TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="{Binding [BtnOpenWireGuard], Source={x:Static local:Lang.Instance}}"
+                                                Style="{StaticResource FlatBtn}" FontSize="10" Padding="12,6"
+                                                Click="OpenWireGuard_Click"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
                             <!-- Orphaned services -->
                             <TextBlock Text="{Binding [SettingsSectionOrphans], Source={x:Static local:Lang.Instance}}"
                                        Style="{StaticResource SettingsSectionHeader}"/>
@@ -609,39 +741,82 @@
                                        Style="{StaticResource SettingsSectionHeader}"/>
                             <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,16">
                                 <StackPanel>
-                                    <Grid>
+
+                                    <!-- Version + status badge row -->
+                                    <Grid Margin="0,0,0,8">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0">
-                                            <TextBlock x:Name="UpdateStatusLabel"
-                                                       FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11" Foreground="{DynamicResource TextPrimary}"
-                                                       TextWrapping="Wrap"/>
+                                            <TextBlock x:Name="VersionLabel"
+                                                       FontFamily="{DynamicResource Theme.FontFamily}"
+                                                       FontSize="15" FontWeight="Bold"
+                                                       Foreground="{DynamicResource TextPrimary}"/>
                                             <TextBlock x:Name="LastCheckedLabel"
-                                                       FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10" Foreground="{DynamicResource TextMuted}"
-                                                       Margin="0,4,0,0"/>
+                                                       FontFamily="{DynamicResource Theme.FontFamily}"
+                                                       FontSize="10" Foreground="{DynamicResource TextMuted}"
+                                                       Margin="0,3,0,0"/>
                                         </StackPanel>
-                                        <Button Grid.Column="1" x:Name="CheckUpdateBtn"
-                                                Style="{StaticResource FlatBtn}"
-                                                FontSize="10" Padding="12,6" Margin="12,0,0,0"
-                                                VerticalAlignment="Top" Click="CheckUpdate_Click"/>
+                                        <!-- Status badge pill -->
+                                        <Border Grid.Column="1" x:Name="UpdateStatusBadge"
+                                                CornerRadius="10" Padding="10,4"
+                                                VerticalAlignment="Center" Margin="12,0,0,0">
+                                            <TextBlock x:Name="UpdateStatusLabel"
+                                                       FontFamily="{DynamicResource Theme.FontFamily}"
+                                                       FontSize="10" FontWeight="SemiBold"/>
+                                        </Border>
                                     </Grid>
-                                    <Button x:Name="DoUpdateBtn" Style="{StaticResource SuccessBtn}"
-                                            FontSize="11" Padding="14,6" Margin="0,10,0,0"
-                                            HorizontalAlignment="Left" Visibility="Collapsed"
-                                            Click="DoUpdate_Click"/>
+
+                                    <!-- Separator -->
+                                    <Border Height="1" Background="{DynamicResource BorderColor}" Margin="0,0,0,10"/>
+
+                                    <!-- Frequency pills row -->
+                                    <TextBlock Text="{Binding [UpdateCheckFrequencyLabel], Source={x:Static local:Lang.Instance}}"
+                                               FontFamily="{DynamicResource Theme.FontFamily}"
+                                               FontSize="10" Foreground="{DynamicResource TextMuted}"
+                                               Margin="0,0,0,6"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                        <RadioButton x:Name="FreqOnStart" GroupName="UpdateFreq"
+                                                     Content="{Binding [UpdateCheckOnStart], Source={x:Static local:Lang.Instance}}"
+                                                     Style="{StaticResource PillRadio}"
+                                                     Checked="UpdateFreq_Changed" Tag="onstart"/>
+                                        <RadioButton x:Name="FreqDaily" GroupName="UpdateFreq"
+                                                     Content="{Binding [UpdateCheckDaily], Source={x:Static local:Lang.Instance}}"
+                                                     Style="{StaticResource PillRadio}" Margin="6,0,0,0"
+                                                     Checked="UpdateFreq_Changed" Tag="daily"/>
+                                        <RadioButton x:Name="FreqWeekly" GroupName="UpdateFreq"
+                                                     Content="{Binding [UpdateCheckWeekly], Source={x:Static local:Lang.Instance}}"
+                                                     Style="{StaticResource PillRadio}" Margin="6,0,0,0"
+                                                     Checked="UpdateFreq_Changed" Tag="weekly"/>
+                                        <RadioButton x:Name="FreqManual" GroupName="UpdateFreq"
+                                                     Content="{Binding [UpdateCheckManual], Source={x:Static local:Lang.Instance}}"
+                                                     Style="{StaticResource PillRadio}" Margin="6,0,0,0"
+                                                     Checked="UpdateFreq_Changed" Tag="manual"/>
+                                    </StackPanel>
+
+                                    <!-- Action buttons row -->
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button x:Name="CheckUpdateBtn"
+                                                Style="{StaticResource FlatBtn}"
+                                                FontSize="10" Padding="12,6"
+                                                Click="CheckUpdate_Click"/>
+                                        <Button x:Name="DoUpdateBtn"
+                                                Style="{StaticResource SuccessBtn}"
+                                                FontSize="10" Padding="12,6" Margin="8,0,0,0"
+                                                Visibility="Collapsed"
+                                                Click="DoUpdate_Click"/>
+                                    </StackPanel>
+
                                 </StackPanel>
                             </Border>
 
-                            <!-- Version info -->
+                            <!-- Credits -->
                             <Border Style="{StaticResource SettingsCard}">
                                 <StackPanel>
-                                    <TextBlock x:Name="VersionLabel"
-                                               FontFamily="{DynamicResource Theme.FontFamily}" FontSize="11" Foreground="{DynamicResource TextPrimary}"/>
                                     <TextBlock Text="by Harold Masselink"
-                                               FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10" Foreground="{DynamicResource TextMuted}"
-                                               Margin="0,4,0,0"/>
+                                               FontFamily="{DynamicResource Theme.FontFamily}"
+                                               FontSize="10" Foreground="{DynamicResource TextMuted}"/>
                                     <TextBlock x:Name="GithubLink"
                                                Text="github.com/masselink/MasselGUARD"
                                                FontFamily="{DynamicResource Theme.FontFamily}" FontSize="10"

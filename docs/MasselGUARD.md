@@ -1,6 +1,6 @@
 # MasselGUARD — How it works
 
-Technical reference for v2.5.0. For end-user instructions see [`MANUAL.md`](MANUAL.md).
+Technical reference for v2.9.0 (build YYMMDDHHMM). For end-user instructions see [`MANUAL.md`](MANUAL.md).
 
 ---
 
@@ -79,25 +79,34 @@ This prevents the false-positive "already running" message when relaunching afte
 MasselGUARD uses `wlanapi.dll` directly rather than WMI or process spawning.
 
 ```
-WlanRegisterNotification()
-  └─ callback fires on ACM codes:
-       9  = connected
-       10 = disconnected
-       21 = roaming
+WlanOpenHandle(version=2)
+WlanRegisterNotification(WLAN_NOTIFICATION_SOURCE_ACM)
+  └─ OnNotification() fires on ACM codes:
+       9  = ACM_CONNECTED
+       10 = ACM_DISCONNECTED
+       20 = ACM_CONNECTION_COMPLETE
 
-OnWifiChanged()
-  ├─ GetCurrentSsid()    WlanQueryInterface(WLAN_INTF_OPCODE_CURRENT_CONNECTION)
-  ├─ Update status bar
-  ├─ Log WiFi: <SSID> (secured / open)
-  └─ ApplyRules(ssid)    (skipped in disable WiFi rules)
+FireIfChanged(ssid, isOpen)
+  └─ only invokes SsidChanged if ssid != _lastFiredSsid
+     (deduplicates ACM_CONNECTED + ACM_CONNECTION_COMPLETE)
+
+MainWindow.OnWifiChanged(ssid, isOpen)       [UI thread via Dispatcher.BeginInvoke]
+  ├─ UpdateWifiLabel(ssid)
+  └─ _vm.ApplyWifiState(ssid, isOpen)
+       ├─ null ssid → 2-second debounce → re-query → disconnect or re-apply
+       └─ non-null → log, EvaluateWifi(), ApplyRuleResult()
 ```
 
-`GetCurrentSsid()` reads `WLAN_CONNECTION_ATTRIBUTES` directly from memory:
+`ReadCurrentSsidFromApi()` reads `WLAN_CONNECTION_ATTRIBUTES` directly from memory:
 
 | Offset | Field | Used for |
 |---|---|---|
-| 520 | `uSSIDLength` | SSID byte length |
+| 0 | `isState` (DWORD) | Must equal 1 (connected) before reading SSID |
+| 520 | `uSSIDLength` (DWORD) | SSID byte length (clamped to 0–32) |
 | 524 | `ucSSID[32]` | SSID bytes (UTF-8) |
+| 576 | `bSecurityEnabled` (BOOL) | `false` = open network |
+
+`WLAN_INTERFACE_INFO` stride: 532 bytes per entry.
 | 580 | `bSecurityEnabled` | 0 = open network |
 
 A 1-second `DispatcherTimer` also calls `UpdateStatusDisplay()` to keep the active tunnel label and tray icon in sync.
@@ -372,3 +381,276 @@ Builds `tunnel.dll` from source (requires Go 1.21+ and gcc/MinGW). Downloads `wi
 | Pre/post script not running | Path missing or spaces without quotes | Use Browse; check Extended log for `[Script]` entries |
 | Theme not in picker | `theme.json` missing `type` field | Ensure `type` is `"dark"` or `"light"` |
 | Import warning on same-version file | AppVersion includes `-beta` suffix in old export | Proceed — fields are compatible |
+
+---
+
+## 20. Run modes and installation
+
+`MainWindow.AppRunModeKind` enum:
+
+| Value | Condition |
+|---|---|
+| `Standalone` | `GetInstalledPath()` returns null |
+| `ManagedPortable` | Installed path found, but current exe directory ≠ installed path |
+| `Managed` | Current exe directory == installed path (using `Path.GetFullPath()` comparison) |
+
+`GetInstalledPath()`:
+1. Checks `AppConfig.InstalledPath` (stored as a directory); tests `File.Exists(dir + "\MasselGUARD.exe")`
+2. Falls back to `HKLM\SOFTWARE\MasselGUARD\InstallPath`; syncs found value back to config
+
+**UAC bypass** (`Program.cs`):
+```
+if (!IsElevated() && ScheduledTaskExists("MasselGUARD"))
+    Process.Start("schtasks.exe", "/run /tn MasselGUARD /i")
+    Environment.Exit(0)
+```
+
+The `MasselGUARD` Scheduled Task is created at `RunLevel=Highest` during install when the user opts in to "Start with Windows". This is the same pattern used by WireGuard for Windows.
+
+---
+
+## 21. Tray icon rendering
+
+`App.TrayIconHelper.RenderIcon(int S, int activeCount)` produces a 32-bit ARGB bitmap at size S (typically 16 or 32 px) using GDI+ (`System.Drawing`).
+
+**Active state** (`activeCount > 0`):
+- Shield filled with `Success` theme colour (resolved from `Application.Current.Resources["Success"]` as `SolidColorBrush`)
+- White checkmark chevron (✓ style) inside
+
+**Idle state** (`activeCount == 0`):
+- Shield filled with `CardBg` theme colour
+- Shield outlined with `BorderColor` theme colour at 1.2 px
+- `Accent`-coloured downward chevron inside
+
+The icon is only redrawn when `_lastTrayActiveCount` changes — not on the 1-second `StatusTick`.
+
+---
+
+## 22. WiFi Rules panel (main window)
+
+A read-only summary of `AppConfig.Rules` displayed below the tunnel management buttons in `Grid.Row="3"` (header) and `Grid.Row="4"` (content) of the left column.
+
+Visibility logic in `RefreshWifiRulesPanel()`:
+```
+visible = AppConfig.ShowWifiRulesOnMainWindow && !AppConfig.ManualMode
+```
+
+The right column (Activity Log) uses `Grid.RowSpan="5"` so it always fills the full height of the outer grid regardless of the left panel height.
+
+---
+
+## 23. Tunnel uptime
+
+`TunnelEntryViewModel._connectedAt` (nullable `DateTime`) is set to `DateTime.UtcNow` when `IsActive` transitions `false → true`. It is cleared on disconnect.
+
+`StatusText` formats `DateTime.UtcNow - _connectedAt` as:
+- `< 60s` → `Xs`
+- `< 1h` → `Xm YYs`
+- `< 24h` → `Xh YYm`
+- `≥ 24h` → `Xd YYh YYm`
+
+`RefreshStatus()` raises `PropertyChanged(nameof(StatusText))` every tick when active, driven by the 1-second `DispatcherTimer` in `MainViewModel`.
+
+---
+
+## 24. Deferred-save pattern (SettingsWindow)
+
+`SettingsWindow` creates `_draft = _main.ConfigSvc.Config.DeepClone()` on `Loaded`. All handler mutations target `_draft`. `_vm` (SettingsViewModel) is populated from `_draft` and stages additional fields (rules, language, mode, log level, themes).
+
+On **Save** (`SaveBtn_Click`):
+1. Snapshot `before = _main.ConfigSvc.Config.DeepClone()`
+2. Copy `_draft` fields to `ConfigSvc.Config`
+3. Call `_vm.DoSave()` — writes `_vm` fields to config and calls `ConfigSvc.Save()`
+4. If extended logging: call `LogChangedSettings(before, ConfigSvc.Config)` — logs only differing fields
+
+On **Cancel** / close without Save:
+- `OnClosing` calls `ThemeManager.Instance.Load(_originalTheme)` to revert any live theme preview
+
+---
+
+## 25. WiFi rule name and execution counter
+
+`TunnelRule` model fields added:
+```csharp
+public string Name           { get; set; } = "";   // display name
+public int    ExecutionCount { get; set; } = 0;    // incremented by RuleEngine on match
+```
+
+`RuleEngine.EvaluateWifi` increments `match.ExecutionCount++` before returning a result. Config is saved by the caller after rule execution.
+
+`WifiRuleRow` display class auto-generates `RuleName` when `rule.Name` is empty:
+```csharp
+var autoName = string.IsNullOrEmpty(r.Tunnel)
+    ? $"{ssid} → disconnect"
+    : $"{ssid} → {r.Tunnel}";
+RuleName = string.IsNullOrEmpty(r.Name) ? autoName : r.Name;
+```
+
+---
+
+## 26. WiFi rules drag-to-reorder
+
+`WifiRulesListView` has `AllowDrop="True"`. Three handlers:
+- `PreviewMouseDown` — captures `WifiRuleRow` and start position
+- `PreviewMouseMove` — starts `DragDrop.DoDragDrop` after 4 px movement
+- `Drop` — finds source and target by SSID, removes and reinserts in `ConfigSvc.Config.Rules`, saves
+
+---
+
+## 27. Double-fire prevention
+
+Two guards prevent rules firing twice on a network switch:
+
+**Guard 1** — `ApplyWifiState` entry:
+```csharp
+if (ssid == _currentSsid) return;   // already on this SSID
+```
+
+**Guard 2** — Debounce callback:
+```csharp
+var (live, liveOpen) = _wifi.QueryCurrentSsid();
+if (!string.IsNullOrEmpty(live))
+{
+    if (live != _currentSsid)   // only apply if connect event hasn't already handled it
+        ApplyWifiState(live, liveOpen);
+    return;
+}
+```
+
+Sequence on network switch (MasselTHINGS → MasselNET):
+1. `ACM_DISCONNECTED` → debounce timer starts (2 s)
+2. `ACM_CONNECTED` → `ApplyWifiState("MasselNET")` → `_currentSsid = "MasselNET"` → rule fires
+3. Debounce fires 2 s later → re-queries → `live = "MasselNET"` → Guard 2: `live == _currentSsid` → no-op
+
+---
+
+## 28. Build number
+
+`BUILD.bat` generates the build number:
+```bat
+for /f %%a in ('powershell -NoProfile -Command "Get-Date -Format yyMMddHHmm"') do set BUILD_NUM=%%a
+set FULL_VERSION=2.9.0.%BUILD_NUM%
+```
+
+Injects into `UpdateChecker.cs` via a temp `.ps1` file:
+```bat
+echo ... -replace 'CurrentVersion = ".*?"', 'CurrentVersion = "%FULL_VERSION%"' | Set-Content $f > temp.ps1
+powershell -File temp.ps1
+```
+
+`Version.TryParse` handles 4-part versions natively for comparison.
+
+---
+
+## 29. Tray menu icons
+
+`DrawMenuIcon(MenuIconKind)` produces a 16×16 GDI+ bitmap using theme colours from `Application.Current.Resources`:
+
+| Kind | Description |
+|---|---|
+| `ShieldOff` | Shield filled with `BorderColor` |
+| `ShieldOn` | Shield filled with `Success` + white checkmark |
+| `Window` | Window frame with Accent title bar + 3 dots |
+| `Exit` | Door + right arrow in `ErrorColor` |
+
+`UpdateTrayStatus` updates `_tunnelMenuHeader.Image` to `ShieldOn`/`ShieldOff` based on `activeCount`.
+
+---
+
+## 30. Notification duration
+
+`AppConfig.NotificationDurationSeconds` (default 5). Picker in Settings → Appearance: 3 / 5 / 10 / 15 / 30 seconds.
+
+`ShowTrayNotification(title, body, durationMs)` uses `_trayIcon.ShowBalloonTip(durationMs)` with `BalloonTipIcon = ToolTipIcon.Info`. The shield tray icon appears as the notification source in the Windows notification centre automatically.
+
+---
+
+## 31. Defaults button popup
+
+`DefaultsBtn_Click` builds a code-only `Window` (no XAML) with two `ComboBox` pickers — default action tunnel and open network protection — each with a "— clear —" entry. Positioned at:
+
+```csharp
+var winPos = PointToScreen(new Point(0, 0));
+popup.Left = winPos.X / dpiX + (ActualWidth  - popup.ActualWidth)  / 2;
+popup.Top  = winPos.Y / dpiY + (ActualHeight - popup.ActualHeight) / 2;
+```
+
+On Save: writes `DefaultAction`, `DefaultTunnel`, `OpenWifiTunnel` to config, then calls `NotifyAllBadges()`, `UpdateStatusBarCentre()`, `RefreshWifiRulesPanel()`, `_vm.RebuildTunnelList()`, `ApplyGroupFilter()`.
+
+---
+
+## 32. Drag tunnels into groups
+
+Each tab button created in `AddTab()` receives:
+```csharp
+btn.AllowDrop = true;
+btn.DragOver  += TunnelTabDragOver;
+btn.Drop      += TunnelTabDrop;
+```
+
+`TunnelTabDragOver` accepts `"TunnelEntry"` data format (same key used by row drag). `TunnelTabDrop` reads `btn.Tag` for the group name, sets `stored.Group = tag == "Uncategorized" ? "" : tag`, saves, logs, and calls `_vm.RebuildTunnelList()` + `RebuildTunnelGroups()`.
+
+---
+
+## 33. Settings tab routing
+
+`TabBtn_Click` maps button `Name` → page name via a `switch`:
+
+```csharp
+string tab = btn.Name switch
+{
+    "TabBtnGroups"        => "Groups",
+    "TabBtnAppearance"    => "Appearance",
+    "TabBtnDefaultAction" => "DefaultAction",
+    "TabBtnRules"         => "Rules",
+    "TabBtnAdvanced"      => "Advanced",
+    "TabBtnAbout"         => "About",
+    _                     => "General",
+};
+```
+
+`Tab` is not used for routing because `SideTabBtn` style triggers on `Tag="Active"` for the highlight — the tag is exclusively for visual state.
+
+`ShowTab(tab)` sets visibility on all `Page*` controls, sets `TabBtn*.Tag = "Active"` for the active button, and calls the appropriate refresh method.
+
+---
+
+## 34. Toast notification model
+
+`ToastNotification` (public record-like class):
+
+| Property | Type | Description |
+|---|---|---|
+| `Category` | `string` | Header category label |
+| `Primary` | `string` | Large primary text (tunnel name) |
+| `Secondary` | `string?` | Muted secondary text (rule reason) |
+| `StripColor` | `string?` | Resource key (`"Accent"`, `"Success"`, `"Warning"`) or hex |
+| `DurationMs` | `int` | Auto-dismiss duration in ms |
+
+`ShowTrayNotification(ToastNotification n)` deduplicates by `Category|Primary|Secondary` key, suppressing identical notifications within 1 second. A `DispatcherTimer` resets the key after 1 second.
+
+The legacy `ShowTrayNotification(string title, string body, int durationMs)` overload maps to a `ToastNotification` with `Category = title`, `Primary = body`.
+
+---
+
+## 35. Rule edit → tunnel list refresh
+
+`WifiRuleAdd_Click`, `WifiRuleEdit_Click`, and `WifiRuleDelete_Click` all call:
+1. `RefreshWifiRulesPanel()` — rebuilds the `WifiRuleRow` collection with updated `ExecutionCount` and names
+2. `_vm.RebuildTunnelList()` — recomputes `TunnelEntryViewModel.RuleCount` for all tunnels from `ConfigSvc.Config.Rules`
+
+This ensures the Rules column in the tunnel list stays in sync with any rule change.
+
+---
+
+## 36. Managed Portable version check
+
+`NormaliseVersion(v)` strips leading `v`/`V` and whitespace. Comparison:
+
+```csharp
+if (NormaliseVersion(currentVer) == NormaliseVersion(installedVer)) return; // identical, no prompt
+bool currentIsNewer = IsVersionNewer(currentVer, installedVer);
+string msg = currentIsNewer ? "...is newer than..." : "...differs from...";
+```
+
+Triggers on any difference including build number — `2.9.0.2505181430` vs `2.9.0.2505161200` will prompt. `IsVersionNewer` uses 4-part `Version.TryParse` comparison so build timestamps sort correctly.

@@ -16,7 +16,7 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="40"/>
                 <RowDefinition Height="*"/>
-                <RowDefinition Height="52"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
             <!-- Title bar -->
@@ -159,15 +159,34 @@
             <!-- Button bar -->
             <Border Grid.Row="2" Background="{DynamicResource Surface}"
                     CornerRadius="{DynamicResource Theme.CornerRadiusBottom}">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
-                            VerticalAlignment="Center" Margin="0,0,16,0">
-                    <Button Content="{Binding [BtnCancel], Source={x:Static local:Lang.Instance}}"
-                            Style="{StaticResource FlatBtn}" Padding="20,6" Margin="0,0,8,0"
-                            Click="CancelBtn_Click"/>
-                    <Button Content="{Binding [BtnSaveTunnel], Source={x:Static local:Lang.Instance}}"
-                            Style="{StaticResource PrimaryBtn}" Padding="20,6"
-                            Click="SaveBtn_Click"/>
-                </StackPanel>
+                <Grid Margin="16,10">
+                    <!-- Left: default + open protection toggles -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Left"
+                                VerticalAlignment="Center">
+                        <ToggleButton x:Name="IsDefaultToggle"
+                                      Style="{StaticResource ToggleSwitch}"
+                                      Margin="0,0,6,0"/>
+                        <TextBlock Text="⚡ Default action"
+                                   FontSize="10" Foreground="{DynamicResource TextMuted}"
+                                   VerticalAlignment="Center" Margin="0,0,16,0"/>
+                        <ToggleButton x:Name="IsOpenProtectionToggle"
+                                      Style="{StaticResource ToggleSwitch}"
+                                      Margin="0,0,6,0"/>
+                        <TextBlock Text="🔓 Open network protection"
+                                   FontSize="10" Foreground="{DynamicResource TextMuted}"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <!-- Right: Cancel + Save -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                VerticalAlignment="Center">
+                        <Button Content="{Binding [BtnCancel], Source={x:Static local:Lang.Instance}}"
+                                Style="{StaticResource FlatBtn}" Padding="20,6" Margin="0,0,8,0"
+                                Click="CancelBtn_Click"/>
+                        <Button Content="{Binding [BtnSaveTunnel], Source={x:Static local:Lang.Instance}}"
+                                Style="{StaticResource PrimaryBtn}" Padding="20,6"
+                                Click="SaveBtn_Click"/>
+                    </StackPanel>
+                </Grid>
             </Border>
         </Grid>
     </Border>

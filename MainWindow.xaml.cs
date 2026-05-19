@@ -1,19 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
-using System.ComponentModel;
-using System.Diagnostics;
-using System.IO;
 using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.Win32;
-using System.ServiceProcess;
-using System.Security.Cryptography;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -21,4073 +8,1116 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
+using System.Runtime.InteropServices;
+using MasselGUARD.Infrastructure;
+using MasselGUARD.Models;
+using MasselGUARD.Services;
+using MasselGUARD.ViewModels;
 
 namespace MasselGUARD
 {
-    public class TunnelRule : INotifyPropertyChanged
-    {
-        private string _ssid   = "";
-        private string _tunnel = "";
-        private string _networkType = "wifi";
-        private string _adapterFilter = "";
-
-        public string Ssid   { get => _ssid;   set { _ssid   = value; OnProp(); } }
-        public string Tunnel { get => _tunnel; set { _tunnel = value; OnProp(); OnProp(nameof(TunnelDisplay)); } }
-
-        /// <summary>"wifi" | "ethernet" | "vpn" | "any"</summary>
-        public string NetworkType
-        {
-            get => _networkType;
-            set { _networkType = value; OnProp(); OnProp(nameof(NetworkTypeDisplay)); }
-        }
-
-        /// <summary>Optional partial adapter name filter (case-insensitive). Empty = match any adapter of NetworkType.</summary>
-        public string AdapterFilter
-        {
-            get => _adapterFilter;
-            set { _adapterFilter = value; OnProp(); }
-        }
-
-        [JsonIgnore] public string TunnelDisplay => string.IsNullOrEmpty(_tunnel) ? "\u2014 disconnect" : _tunnel;
-        [JsonIgnore] public string NetworkTypeDisplay => _networkType switch
-        {
-            "ethernet" => "Ethernet",
-            "vpn"      => "VPN",
-            "any"      => "Any",
-            _          => "WiFi",
-        };
-        [JsonIgnore] public string StatusText { get; set; } = "\u2014";
-        [JsonIgnore] public SolidColorBrush StatusColor =>
-            StatusText == "\u25cf active"
-                ? ThemeRes.Success
-                : ThemeRes.TextMuted;
-
-        public event PropertyChangedEventHandler? PropertyChanged;
-        private void OnProp([CallerMemberName] string? n = null)
-            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
-    }
-
-    // Represents a known tunnel with live status for the manual panel
-    public enum TunnelType { Local, WireGuard }
-
-    public class TunnelEntry : System.ComponentModel.INotifyPropertyChanged
-    {
-        private bool _active      = false;
-        private bool _available   = true;
-
-        public string     Name   { get; set; } = "";
-        public TunnelType Type   { get; set; } = TunnelType.Local;
-        /// <summary>Group this tunnel belongs to. Empty string = ungrouped.</summary>
-        public string     Group  { get; set; } = "";
-        /// <summary>User notes — shown as tooltip on the tunnel name.</summary>
-        public string     Notes  { get; set; } = "";
-
-        public bool Active
-        {
-            get => _active;
-            set { _active = value; OnProp(); OnProp(nameof(StatusText)); OnProp(nameof(StatusColor)); OnProp(nameof(ButtonLabel)); OnProp(nameof(ButtonEnabled)); }
-        }
-
-        public bool IsAvailable
-        {
-            get => _available;
-            set { _available = value; OnProp(); OnProp(nameof(StatusText)); OnProp(nameof(StatusColor)); OnProp(nameof(NameColor)); OnProp(nameof(NameDecoration)); OnProp(nameof(ButtonEnabled)); OnProp(nameof(ButtonTooltip)); }
-        }
-
-        public bool WireGuardInstalled { get; set; } = true;
-
-        // ── Display ──────────────────────────────────────────────────────────
-        public string StatusText =>
-            !_available ? Lang.T("TunnelUnavailable") :
-            _active     ? Lang.T("TunnelStatusConnected") :
-                          Lang.T("TunnelStatusDisconnected");
-
-        public System.Windows.Media.SolidColorBrush StatusColor =>
-            !_available ? ThemeRes.Danger
-            : _active   ? ThemeRes.Success
-                        : ThemeRes.TextMuted;
-
-        public System.Windows.Media.SolidColorBrush NameColor =>
-            _available ? ThemeRes.TextPrimary : ThemeRes.TextMuted;
-
-        public System.Windows.TextDecorationCollection? NameDecoration =>
-            _available ? null : System.Windows.TextDecorations.Strikethrough;
-
-        public string ButtonLabel   => _active ? Lang.T("TunnelBtnDisconnect") : Lang.T("TunnelBtnConnect");
-        public bool   ButtonEnabled => _available && (Type == TunnelType.Local || WireGuardInstalled);
-        public string ButtonTooltip =>
-            !_available                             ? Lang.T("TunnelUnavailableTooltip") :
-            (!WireGuardInstalled && Type != TunnelType.Local) ? Lang.T("TunnelWireGuardNotInstalled") : "";
-
-        public string TypeLabel => Type == TunnelType.Local
-            ? Lang.T("TunnelTypeLocal")
-            : Lang.T("TunnelTypeWireGuard");
-
-        public System.Windows.Media.SolidColorBrush TypeColor =>
-            Type == TunnelType.Local ? ThemeRes.Accent : ThemeRes.TextMuted;
-
-        public void RefreshLabels()
-        {
-            OnProp(nameof(StatusText));
-            OnProp(nameof(ButtonLabel));
-            OnProp(nameof(TypeLabel));
-            OnProp(nameof(NameColor));
-            OnProp(nameof(TypeColor));
-            OnProp(nameof(StatusColor));
-        }
-
-        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
-        private void OnProp([System.Runtime.CompilerServices.CallerMemberName] string? n = null)
-            => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(n));
-    }
-
-    // ── App mode ──────────────────────────────────────────────────────────────
-    /// <summary>
-    /// Controls which tunnel backends are available.
-    ///   Standalone  — only tunnel.dll (local DLLs required, no WireGuard app needed)
-    ///   Companion   — only the official WireGuard app (via ServiceController / wireguard.exe)
-    ///   Mixed       — both backends available simultaneously (default)
-    /// </summary>
-    public enum AppMode { Standalone, Companion, Mixed }
-
-        public class StoredTunnel
-    {
-        public string  Name   { get; set; } = "";
-        public string  Config { get; set; } = "";
-        public string  Source { get; set; } = "local";
-        public string? Path   { get; set; } = null;
-        /// <summary>Group this tunnel belongs to. Empty = Ungrouped.</summary>
-        public string  Group  { get; set; } = "";
-        /// <summary>User notes — visible as a tooltip and in the metadata editor.</summary>
-        public string  Notes  { get; set; } = "";
-
-        public bool   KillSwitch           { get; set; } = false;
-        public int    RetryCount           { get; set; } = 0;
-        public int    RetryDelaySec        { get; set; } = 5;
-        public string PreConnectScript     { get; set; } = "";
-        public string PostConnectScript    { get; set; } = "";
-        public string PreDisconnectScript  { get; set; } = "";
-        public string PostDisconnectScript { get; set; } = "";
-    }
-
-    /// <summary>A named group that organises tunnels into collapsible sections.</summary>
-    public class TunnelGroup
-    {
-        public string Name        { get; set; } = "";
-        /// <summary>Whether the group is expanded in the tunnel list. Persisted.</summary>
-        public bool   IsExpanded  { get; set; } = true;
-        /// <summary>Optional accent colour override for this group header. Empty = use theme accent.</summary>
-        public string Color       { get; set; } = "";
-
-        public TunnelGroup() { }
-        public TunnelGroup(string name) { Name = name; }
-    }
-
-    public class AppConfig
-    {
-        public List<TunnelRule>   Rules              { get; set; } = new();
-        /// <summary>LAN/Ethernet-specific rules. Each rule matches on AdapterFilter (adapter name or DNS suffix).</summary>
-        public List<StoredTunnel> Tunnels            { get; set; } = new();
-        /// <summary>User-defined tunnel groups. Order is preserved in the UI.</summary>
-        public List<TunnelGroup>  TunnelGroups       { get; set; } = new()
-        {
-            new TunnelGroup("Work"),
-            new TunnelGroup("Personal"),
-            new TunnelGroup("Travel"),
-        };
-        public string             DefaultAction      { get; set; } = "none";
-        public string             DefaultTunnel      { get; set; } = "";
-        public string             InstallDirectory   { get; set; } = @"C:\Program Files\WireGuard";
-        public string             Language           { get; set; } = "en";
-        public string?            InstalledPath      { get; set; } = null;
-        public DateTime           LastUpdateCheck    { get; set; } = DateTime.MinValue;
-        public string?            LatestKnownVersion { get; set; } = null;
-        public bool               ManualMode                  { get; set; } = false;
-        public string             LogLevelSetting             { get; set; } = "normal";
-        // When true the startup prompt "you are running a portable copy while
-        // an installed version exists — update it?" is silently skipped.
-        public bool               SuppressPortableUpdatePrompt { get; set; } = false;
-
-        // Tunnel to activate when the device connects to an open (passwordless)
-        // WiFi network. Empty string = feature disabled.
-        public string             OpenWifiTunnel               { get; set; } = "";
-
-        // When true a small WPF popup appears near the tray when a tunnel
-        // is connected or disconnected while the main window is hidden.
-        public bool               ShowTrayPopupOnSwitch        { get; set; } = true;
-
-        // Active theme folder name (maps to theme/<ActiveTheme>/theme.json)
-        public string             ActiveTheme                  { get; set; } = "default-dark";
-        // Separate dark/light theme selections for auto-switching
-        public string             ActiveDarkTheme              { get; set; } = "default-dark";
-        public string             ActiveLightTheme             { get; set; } = "default-light";
-        // When true, automatically switch between dark/light based on Windows system preference
-        public bool               AutoTheme                    { get; set; } = false;
-
-        // ── App mode (replaces the old EnableLocalTunnels boolean) ───────────
-        public AppMode Mode { get; set; } = AppMode.Standalone;
-
-        // Backward-compat shim: old config.json files had "EnableLocalTunnels"
-        // Deserialise it and forward to Mode on first load.
-        [JsonIgnore] private bool _legacyLocalTunnels = true;
-        public bool EnableLocalTunnels
-        {
-            get => Mode != AppMode.Companion;
-            set { _legacyLocalTunnels = value;
-                  // Only downgrade Mixed→Companion; don't overwrite an already-set Mode
-                  if (!value && Mode == AppMode.Mixed) Mode = AppMode.Companion; }
-        }
-
-        [JsonIgnore]
-        public string ConfDirectory => string.IsNullOrWhiteSpace(InstallDirectory)
-            ? ""
-            : Path.Combine(InstallDirectory, @"Data\Configurations");
-
-        [JsonIgnore]
-        public string WgExePath => string.IsNullOrWhiteSpace(InstallDirectory)
-            ? "wireguard"
-            : Path.Combine(InstallDirectory, "wireguard.exe");
-
-        // ── Language persistence helpers ─────────────────────────────────────
-        private static readonly string ConfigPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "MasselGUARD", "config.json");
-
-        public static void SaveLanguage(string code)
-        {
-            try
-            {
-                AppConfig cfg = new();
-                if (File.Exists(ConfigPath))
-                {
-                    var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                    cfg = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath), opts) ?? new AppConfig();
-                }
-                cfg.Language = code;
-                Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
-                File.WriteAllText(ConfigPath,
-                    JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true }));
-            }
-            catch { }
-        }
-
-        public static string LoadLanguage()
-        {
-            try
-            {
-                if (!File.Exists(ConfigPath)) return "en";
-                var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                var cfg  = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath), opts);
-                return cfg?.Language ?? "en";
-            }
-            catch { return "en"; }
-        }
-
-        public static string LoadTheme()
-        {
-            try
-            {
-                if (!File.Exists(ConfigPath)) return "default-dark";
-                var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                var cfg  = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath), opts);
-                return string.IsNullOrWhiteSpace(cfg?.ActiveTheme) ? "default-dark" : cfg.ActiveTheme;
-            }
-            catch { return "default-dark"; }
-        }
-
-        public static bool LoadAutoTheme()
-        {
-            try
-            {
-                if (!File.Exists(ConfigPath)) return false;
-                var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                var cfg  = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath), opts);
-                return cfg?.AutoTheme ?? false;
-            }
-            catch { return false; }
-        }
-
-        public static void SaveTheme(string themeName)
-        {
-            try
-            {
-                AppConfig cfg = new();
-                if (File.Exists(ConfigPath))
-                {
-                    var opts2 = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                    cfg = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath), opts2) ?? new AppConfig();
-                }
-                cfg.ActiveTheme = themeName;
-                Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
-                File.WriteAllText(ConfigPath,
-                    JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true }));
-            }
-            catch { }
-        }
-
-        public static void SaveThemeConfig(string activeTheme, string darkTheme, string lightTheme, bool autoTheme)
-        {
-            try
-            {
-                AppConfig cfg = new();
-                if (File.Exists(ConfigPath))
-                {
-                    var opts2 = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                    cfg = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath), opts2) ?? new AppConfig();
-                }
-                cfg.ActiveTheme      = activeTheme;
-                cfg.ActiveDarkTheme  = darkTheme;
-                cfg.ActiveLightTheme = lightTheme;
-                cfg.AutoTheme        = autoTheme;
-                Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
-                File.WriteAllText(ConfigPath,
-                    JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true }));
-            }
-            catch { }
-        }
-    }
-
-    /// <summary>
-    /// Thin helper for reading theme brush resources from code-behind.
-    /// Returns a fallback colour if the resource key is missing (e.g. at design time).
-    /// </summary>
-    internal static class ThemeRes
-    {
-        private static SolidColorBrush Get(string key, Color fallback)
-        {
-            if (Application.Current?.Resources[key] is SolidColorBrush b) return b;
-            return new SolidColorBrush(fallback);
-        }
-
-        private static SolidColorBrush GetFromColor(string key, Color fallback)
-        {
-            var res = Application.Current?.Resources;
-            if (res?[key] is Color c) return new SolidColorBrush(c);
-            if (res?[key] is SolidColorBrush b) return b;
-            return new SolidColorBrush(fallback);
-        }
-
-        public static SolidColorBrush Accent        => Get("Accent",      Color.FromRgb(88,  166, 255));
-        public static SolidColorBrush Success       => Get("Success",     Color.FromRgb(63,  185,  80));
-        public static SolidColorBrush Danger        => Get("Danger",      Color.FromRgb(247, 129, 102));
-        public static SolidColorBrush TextPrimary   => Get("TextPrimary", Color.FromRgb(230, 237, 243));
-        public static SolidColorBrush TextMuted     => Get("TextMuted",   Color.FromRgb(139, 148, 158));
-        public static SolidColorBrush Border        => Get("BorderColor", Color.FromRgb(48,   54,  61));
-        public static SolidColorBrush LogTimestamp  => GetFromColor("Theme.LogTimestampColor", Color.FromRgb(48, 54, 61));
-    }
-
     public partial class MainWindow : Window
     {
-        private static readonly string ConfigPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "MasselGUARD", "config.json");
+        // ── Services (shared across the application lifetime) ─────────────────
+        internal readonly ConfigService  ConfigSvc;
+        internal readonly LogService     LogSvc;
+        internal readonly WiFiService    WifiSvc;
+        internal readonly TunnelService  TunnelSvc;
+        internal readonly RuleEngine     RuleEngine;
+        internal readonly ScriptService  ScriptSvc;
 
-        private static AppConfig _cfg = new();
-        private static bool _firstRun = false;   // set by LoadConfig when no config file exists
-        private bool _startupComplete = false;   // suppress verbose discovery log after startup
-        private readonly ObservableCollection<TunnelRule>  _rules    = new();
-        private readonly ObservableCollection<TunnelEntry> _tunnels = new();
-        private string? _lastWifi;
-        private TunnelEntry? _selectedTunnel;      // tracks selection across grouped panel
-        private readonly DispatcherTimer _timer = new();
-        private Ringlogger?              _ringlogger;
-        private string                   _ringloggerTunnel = "";
+        // ── ViewModel ─────────────────────────────────────────────────────────
+        internal readonly MainViewModel _vm;
 
-        // WireGuard executable — derived from configured install directory
-        private static string WgExe => _cfg.WgExePath;
-
-        // Called by App before MainWindow is created to validate dependencies
-        public static string? FindWireGuardExe()
-        {
-            // Try registry-detected path first
-            var detected = DetectWireGuardInstallDir();
-            if (detected != null)
-            {
-                var path = System.IO.Path.Combine(detected, "wireguard.exe");
-                if (File.Exists(path)) return path;
-            }
-            // Fallback: just check Program Files
-            var def = @"C:\Program Files\WireGuard\wireguard.exe";
-            return File.Exists(def) ? def : null;
-        }
-
-        // Auto-detect WireGuard install directory from the registry, then common paths
-        private static string? DetectWireGuardInstallDir()
-        {
-            // 1. Registry: HKLM\SOFTWARE\WireGuard — InstallDirectory value
-            try
-            {
-                using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WireGuard");
-                if (key?.GetValue("InstallDirectory") is string dir && Directory.Exists(dir))
-                    return dir.TrimEnd('\\', '/');
-            }
-            catch { }
-
-            // 2. Registry: uninstall entry written by the WireGuard NSIS installer
-            try
-            {
-                using var key = Registry.LocalMachine.OpenSubKey(
-                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\WireGuard");
-                if (key?.GetValue("InstallLocation") is string dir && Directory.Exists(dir))
-                    return dir.TrimEnd('\\', '/');
-            }
-            catch { }
-
-            // 3. Well-known default paths
-            foreach (var candidate in new[]
-            {
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WireGuard"),
-                @"C:\WireGuard",
-            })
-            {
-                if (File.Exists(Path.Combine(candidate, "wireguard.exe")))
-                    return candidate;
-            }
-
-            return null;
-        }
-
-        // Returns the .conf file path — both local and WireGuard use a stored path reference
-        private static string? FindConfPath(string tunnel, out string searched)
-        {
-            searched = "";
-
-            // Check stored reference (both local and wireguard)
-            var stored = _cfg.Tunnels.FirstOrDefault(t =>
-                string.Equals(t.Name, tunnel, StringComparison.OrdinalIgnoreCase));
-            if (stored != null && !string.IsNullOrEmpty(stored.Path) && File.Exists(stored.Path))
-                return stored.Path;
-
-            // Fallback: scan WireGuard install directories
-            var dirs = new List<string>();
-            if (!string.IsNullOrWhiteSpace(_cfg.ConfDirectory))
-                dirs.Add(_cfg.ConfDirectory);
-            dirs.AddRange(new[]
-            {
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),       "WireGuard"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),  "WireGuard"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "WireGuard"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),          "WireGuard"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),          "WireGuard", "Data"),
-                @"C:\WireGuard",
-            });
-            foreach (var dir in dirs)
-            {
-                var p  = Path.Combine(dir, tunnel + ".conf");
-                if (File.Exists(p))  return p;
-                var pd = Path.Combine(dir, tunnel + ".conf.dpapi");
-                if (File.Exists(pd)) return pd;
-            }
-            return null;
-        }
-        private static string? FindConfPath(string tunnel) => FindConfPath(tunnel, out _);
-        // Returns tunnel names stored in config.json
-        internal static List<string> GetAvailableTunnels() =>
-            _cfg.Tunnels
-                .Where(t => IsSourceAllowed(t.Source))
-                .Select(t => t.Name)
-                .Where(n => !string.IsNullOrEmpty(n))
-                .OrderBy(n => n)
-                .ToList();
-
-        /// <summary>Returns true when the given tunnel source is allowed by the current mode.</summary>
-        private static bool IsSourceAllowed(string source) => _cfg.Mode switch
-        {
-            AppMode.Standalone => source == "local",
-            AppMode.Companion  => source != "local",
-            _                  => true   // Mixed
-        };
-
-        private static List<string> GetTunnelsFromFiles()
-        {
-            var candidates = new List<string>();
-
-            // Configured install dir → derive conf path
-            if (!string.IsNullOrWhiteSpace(_cfg.ConfDirectory))
-                candidates.Add(_cfg.ConfDirectory);
-
-            // Registry auto-detect
-            var detected = DetectWireGuardInstallDir();
-            if (detected != null)
-            {
-                var detectedConf = Path.Combine(detected, "Data", "Configurations");
-                if (!candidates.Contains(detectedConf, StringComparer.OrdinalIgnoreCase))
-                    candidates.Add(detectedConf);
-            }
-            candidates.AddRange(new[]
-            {
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),       "WireGuard", "Data", "Configurations"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),  "WireGuard", "Data", "Configurations"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "WireGuard", "Data", "Configurations"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),       "WireGuard"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),  "WireGuard"),
-                @"C:\Program Files\WireGuard\Data\Configurations",
-                @"C:\ProgramData\WireGuard",
-            });
-
-            foreach (var candidate in candidates)
-            {
-                if (string.IsNullOrWhiteSpace(candidate)) continue;
-                try
-                {
-                    if (!Directory.Exists(candidate)) continue;
-                    // WireGuard stores configs as .conf (portable) or .conf.dpapi (DPAPI-encrypted)
-                    var found = Directory.GetFiles(candidate)
-                        .Where(f => f.EndsWith(".conf", StringComparison.OrdinalIgnoreCase)
-                                 || f.EndsWith(".conf.dpapi", StringComparison.OrdinalIgnoreCase))
-                        .Select(f => {
-                            var name = Path.GetFileName(f);
-                            if (name.EndsWith(".conf.dpapi", StringComparison.OrdinalIgnoreCase))
-                                name = name.Substring(0, name.Length - ".conf.dpapi".Length);
-                            else
-                                name = Path.GetFileNameWithoutExtension(name);
-                            return name;
-                        })
-                        .OrderBy(n => n)
-                        .ToList();
-                    if (found.Count > 0)
-                    {
-                        // Back-derive the install directory from the conf folder
-                        var expectedSuffix = Path.DirectorySeparatorChar + "Data" +
-                                             Path.DirectorySeparatorChar + "Configurations";
-                        if (candidate.EndsWith(expectedSuffix, StringComparison.OrdinalIgnoreCase))
-                        {
-                            var install = candidate.Substring(0, candidate.Length - expectedSuffix.Length);
-                            if (!string.Equals(_cfg.InstallDirectory, install, StringComparison.OrdinalIgnoreCase))
-                                _cfg.InstallDirectory = install;
-                        }
-                        return found;
-                    }
-                }
-                catch { }
-            }
-            return new List<string>();
-        }
-
-        private static List<string> GetTunnelsFromServices()
-        {
-            // WireGuard registers tunnel services as "WireGuardTunnel$<TunnelName>"
-            // These are visible in the SCM even without access to the conf files
-            try
-            {
-                return ServiceController.GetServices()
-                    .Where(s => s.ServiceName.StartsWith("WireGuardTunnel$", StringComparison.OrdinalIgnoreCase))
-                    .Select(s => s.ServiceName.Substring("WireGuardTunnel$".Length))
-                    .OrderBy(n => n)
-                    .ToList();
-            }
-            catch { return new List<string>(); }
-        }
-
-        // ── Constructor ──────────────────────────────────────────────────────
-
-        public MainWindow()
-        {
-            InitializeComponent();
-            // RulesListView now lives in SettingsWindow
-
-            System.Windows.Application.Current.DispatcherUnhandledException += (s, e) =>
-            {
-                LogRaw("ERROR: " + e.Exception.Message, LogLevel.Warn);
-                e.Handled = true;
-            };
-
-            Loaded += (_, _) =>
-            {
-                // Refresh TunnelEntry labels when language changes
-                Lang.Instance.LanguageChanged += (_, _) =>
-                    Dispatcher.BeginInvoke(() =>
-                    {
-                        foreach (var t in _tunnels) t.RefreshLabels();
-                        UpdateAdminLabel();
-                        UpdateFooterLabel();
-                        RebuildLog();
-                    });
-
-                UpdateAdminLabel();
-                UpdateFooterLabel();
-                var startedFrom = Environment.ProcessPath ?? AppContext.BaseDirectory;
-
-                // Startup summary — always logged at Info so it appears at default level
-                Log("LogAppStarted", LogLevel.Ok);
-                LogRaw($"Started from: {startedFrom}", LogLevel.Info);
-                LogRaw($"  [DBG] OS       : {Environment.OSVersion}", LogLevel.Debug);
-                LogRaw($"  [DBG] .NET     : {Environment.Version}", LogLevel.Debug);
-                LogRaw($"  [DBG] Platform : {Environment.OSVersion.Platform} x{(Environment.Is64BitProcess ? "64" : "32")}", LogLevel.Debug);
-                LogRaw($"  [DBG] User     : {Environment.UserDomainName}\\{Environment.UserName}", LogLevel.Debug);
-                LoadConfig();
-                // Log any orphaned services found at startup
-                Dispatcher.BeginInvoke(
-                    System.Windows.Threading.DispatcherPriority.Background,
-                    () =>
-                    {
-                        var orphans = GetOrphanedServices();
-                        if (orphans.Count > 0)
-                            LogRaw($"⚠ {orphans.Count} orphaned WireGuardTunnel$ service(s) found. "
-                                 + $"Use Settings → Advanced to remove them.",
-                                LogLevel.Warn);
-                    });
-                ApplyManualMode();
-                ApplyLocalTunnelMode();
-                SetupTimer();
-                _startupComplete = true;   // subsequent RefreshTunnelDropdowns won't log discovery
-
-                // (Local tunnels use wireguard.exe /installtunnelservice — no DLLs needed)
-
-                // Sync auto theme on startup — apply correct dark/light if auto is enabled
-                if (_cfg.AutoTheme)
-                {
-                    bool isDark = ThemeManager.GetSystemIsDark();
-                    var target = isDark ? _cfg.ActiveDarkTheme : _cfg.ActiveLightTheme;
-                    if (!string.IsNullOrEmpty(target) && target != ThemeManager.Instance.CurrentThemeName)
-                    {
-                        ThemeManager.Instance.Load(target);
-                        _cfg.ActiveTheme = target;
-                    }
-                }
-                Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
-                    () => UpdateThemeToggleIcon());
-
-                // (Local tunnels use wireguard.exe /installtunnelservice — no DLLs needed)
-
-                // Background update check — once every 7 days
-                if ((DateTime.UtcNow - _cfg.LastUpdateCheck).TotalDays >= 7)
-                    _ = UpdateChecker.CheckAsync(_cfg, () => SaveConfig(), Dispatcher);
-
-                // First run: show setup wizard if no config file existed before LoadConfig()
-                if (_firstRun)
-                {
-                    Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
-                        () =>
-                        {
-                            var wiz = new Views.WizardWindow(this) { Owner = this };
-                            wiz.ShowDialog();
-                        });
-                }
-
-                // If running portable while installed elsewhere, prompt to update
-                // (unless the user chose "don't ask again").
-                if (IsRunningPortableWhileInstalled() && !_cfg.SuppressPortableUpdatePrompt)
-                {
-                    var installPath = GetInstalledPath()!;
-                    var (result, suppress) = ShowUpdatePrompt(
-                        Lang.T("UpdatePromptMessage", installPath),
-                        Lang.T("UpdatePromptTitle"));
-                    if (suppress)
-                    {
-                        _cfg.SuppressPortableUpdatePrompt = true;
-                        SaveConfig("Suppressed portable update prompt");
-                    }
-                    if (result == MessageBoxResult.Yes)
-                        RunUpdate();
-                }
-            };
-        }
-
-        // ── Taskbar icon (force AppWindow style so it appears without WindowStyle) ──
-
+        // ── WPF Taskbar visibility ─────────────────────────────────────────────
         private const int GWL_EXSTYLE      = -20;
         private const int WS_EX_APPWINDOW  = 0x00040000;
         private const int WS_EX_TOOLWINDOW = 0x00000080;
+        [DllImport("user32.dll")] private static extern int  GetWindowLong(IntPtr h, int i);
+        [DllImport("user32.dll")] private static extern int  SetWindowLong(IntPtr h, int i, int v);
+        [DllImport("user32.dll")] private static extern bool DestroyIcon(IntPtr hIcon);
 
-        [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int i);
-        [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr h, int i, int v);
-        [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr hIcon);
-
-        // ── Wlan native API ───────────────────────────────────────────────────
-        [DllImport("wlanapi.dll")] static extern uint WlanOpenHandle(uint clientVersion, IntPtr reserved, out uint negotiatedVersion, out IntPtr clientHandle);
-        [DllImport("wlanapi.dll")] static extern uint WlanEnumInterfaces(IntPtr clientHandle, IntPtr reserved, out IntPtr ppInterfaceList);
-        [DllImport("wlanapi.dll")] static extern uint WlanQueryInterface(IntPtr clientHandle, ref Guid interfaceGuid, uint opCode, IntPtr reserved, out uint dataSize, out IntPtr ppData, IntPtr wlanOpcodeValueType);
-        [DllImport("wlanapi.dll")] static extern void WlanFreeMemory(IntPtr pMemory);
-
-        // WLAN_INTERFACE_INFO_LIST header: dwNumberOfItems(4) + dwIndex(4) then items
-        // WLAN_INTERFACE_INFO: Guid(16) + strInterfaceDescription(512) + isState(4)
-        // WlanQueryInterface opCode 7 = wlan_intf_opcode_current_connection
-        // WLAN_CONNECTION_ATTRIBUTES starts with: isState(4) + wlanConnectionMode(4) +
-        //   strProfileName(512) + wlanAssociationAttributes which starts with:
-        //   dot11Ssid = { uSSIDLength(4) + ucSSID(32) }
-        private const uint WLAN_INTF_OPCODE_CURRENT_CONNECTION = 7;
-        [DllImport("wlanapi.dll")] static extern uint WlanCloseHandle(IntPtr clientHandle, IntPtr reserved);
-        [DllImport("wlanapi.dll")] static extern uint WlanRegisterNotification(IntPtr clientHandle, uint dwNotifSource, bool bIgnoreDuplicate, WlanNotificationCallback funcCallback, IntPtr pCallbackContext, IntPtr pReserved, out uint pdwPrevNotifSource);
-
-        private const uint WLAN_NOTIFICATION_SOURCE_ACM = 0x00000008;
-        private const uint WLAN_NOTIFICATION_SOURCE_ALL = 0x0000FFFF;
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct WLAN_NOTIFICATION_DATA
+        public MainWindow()
         {
-            public uint NotificationSource;
-            public uint NotificationCode;
-            public Guid InterfaceGuid;
-            public uint dwDataSize;
-            public IntPtr pData;
+            // ── Bootstrap services ────────────────────────────────────────────
+            ConfigSvc  = new ConfigService();
+            ConfigSvc.Load();
+
+            LogSvc     = new LogService();
+            LogSvc.IsExtended = ConfigSvc.Config.LogLevelSetting == "extended";
+
+            ScriptSvc  = new ScriptService();
+            TunnelSvc  = new TunnelService(LogSvc, ScriptSvc);
+            WifiSvc    = new WiFiService();
+            RuleEngine = new RuleEngine();
+
+            // ── Build ViewModel ───────────────────────────────────────────────
+            _vm = new MainViewModel(ConfigSvc, TunnelSvc, LogSvc, WifiSvc, RuleEngine);
+
+            // ── Wire ViewModel → View dialog requests ─────────────────────────
+            _vm.AddTunnelRequested    += OnAddTunnel;
+            _vm.EditTunnelRequested   += OnEditTunnel;
+            _vm.DeleteTunnelRequested += OnDeleteTunnel;
+            _vm.QuickConnectRequested += OnQuickConnect;
+            _vm.OpenSettingsRequested += OnOpenSettings;
+            _vm.StatusTick            += OnStatusTick;
+
+            InitializeComponent();
+            DataContext = _vm;
+
+            // ── Startup ───────────────────────────────────────────────────────
+            Loaded += OnLoaded;
         }
 
-        private delegate void WlanNotificationCallback(ref WLAN_NOTIFICATION_DATA data, IntPtr context);
-
-        private IntPtr _wlanHandle = IntPtr.Zero;
-        private WlanNotificationCallback? _wlanCallback; // keep reference to prevent GC
-
-        protected override void OnSourceInitialized(EventArgs e)
+        // ── Loaded ────────────────────────────────────────────────────────────
+        private void OnLoaded(object sender, RoutedEventArgs e)
         {
-            base.OnSourceInitialized(e);
-            var hwnd  = new WindowInteropHelper(this).Handle;
+            ForceTaskbarButton();
 
-            // Force taskbar button to appear (WindowStyle=None hides it otherwise)
-            int style = GetWindowLong(hwnd, GWL_EXSTYLE);
-            SetWindowLong(hwnd, GWL_EXSTYLE, (style & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW);
+            // Log level from config
+            LogSvc.IsExtended = ConfigSvc.Config.LogLevelSetting == "extended";
 
-            // Set window icon to match the tray icon.
-            // Important: do NOT wrap the icon in a using block — CreateBitmapSourceFromHIcon
-            // needs the HICON to stay alive until WPF has copied the pixels. Instead,
-            // extract the handle, create the BitmapSource, then destroy the handle manually.
-            try
+            LogSvc.Ok(Lang.T("LogAppStarted"));
+            LogSvc.Info($"Started from: {Environment.ProcessPath ?? AppContext.BaseDirectory}");
+            LogSvc.Debug($"  [DBG] OS    : {Environment.OSVersion}");
+            LogSvc.Debug($"  [DBG] .NET  : {Environment.Version}");
+            LogSvc.Debug($"  [DBG] User  : {Environment.UserDomainName}\\{Environment.UserName}");
+
+            // Subscribe to log service and render existing entries
+            LogSvc.EntryAdded += AppendLogEntry;
+            RebuildLog();
+
+            // Update footer
+            UpdateAdminLabel();
+            UpdateFooterLabel();
+
+            // Apply language-change refresh
+            Lang.Instance.LanguageChanged += (_, _) => Dispatcher.BeginInvoke(() =>
             {
-                var drawingIcon = TrayIconHelper.CreateIcon(0);
-                var hIcon = drawingIcon.Handle;
-                Icon = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
-                    hIcon,
-                    System.Windows.Int32Rect.Empty,
-                    System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
-                DestroyIcon(hIcon);
-                drawingIcon.Dispose();
-            }
-            catch { }
-        }
+                _vm.RebuildTunnelList();
+                UpdateAdminLabel();
+                UpdateFooterLabel();
+                RebuildLog();
+            });
 
-        // ── Timer ────────────────────────────────────────────────────────────
-
-        private void SetupTimer()
-        {
-            // Timer: refreshes status and polls the tunnel.dll ring-log
-            _timer.Interval = TimeSpan.FromSeconds(2);
-            _timer.Tick += (_, _) => { UpdateStatusDisplay(); PollRinglogger(); };
-            _timer.Start();
-
-            // Register for instant WiFi change notifications via WlanApi
-            RegisterWifiEvents();
-
-            // Set initial state — detect WiFi and apply rules immediately
-            var wifi = GetCurrentSsid();
-            _lastWifi = wifi;
-            UpdateStatusDisplay(wifi);
-            if (wifi != null)
+            // Theme: sync auto-theme on startup
+            if (ConfigSvc.Config.AutoTheme)
             {
-                Log("LogStartupWifi", LogLevel.Info, wifi);
-                ApplyRules(wifi);
-            }
-            else
-            {
-                Log("LogStartupNoWifi", LogLevel.Info);
-                ApplyRules(null);
-            }
-        }
-
-        private void PollRinglogger()
-        {
-            // Find any running local tunnel and tail its ring-log from tunnel.dll
-            var running = _cfg.Tunnels.FirstOrDefault(t =>
-                t.Source == "local" && TunnelDll.IsRunning(t.Name));
-
-            if (running == null)
-            {
-                if (_ringlogger != null)
+                bool isDark = ThemeManager.GetSystemIsDark();
+                var target  = isDark ? ConfigSvc.Config.ActiveDarkTheme
+                                     : ConfigSvc.Config.ActiveLightTheme;
+                if (!string.IsNullOrEmpty(target) &&
+                    target != ThemeManager.Instance.CurrentThemeName)
                 {
-                    _ringlogger.Dispose();
-                    _ringlogger = null;
-                    _ringloggerTunnel = "";
+                    ThemeManager.Instance.Load(target);
+                    ConfigSvc.Config.ActiveTheme = target;
                 }
-                return;
             }
+            UpdateThemeToggleIcon();
 
-            if (!string.Equals(running.Name, _ringloggerTunnel,
-                StringComparison.OrdinalIgnoreCase))
+            // Build initial tunnel list
+            _vm.RebuildTunnelList();
+            RebuildTunnelGroups();
+            RefreshWifiRulesPanel();
+            UpdateStatusBarCentre();
+
+            // WiFi — single consolidated handler: label + rule evaluation
+            WifiSvc.SsidChanged += OnWifiChanged;
+            WifiSvc.Start();
+
+            // Query initial state; retry with timer until SSID found
+            TryUpdateWifi();
+            var retryTimer = new System.Windows.Threading.DispatcherTimer
             {
-                _ringlogger?.Dispose();
-                var logPath = TunnelDll.GetLogFilePath(running.Name, ConfPath(running.Name));
-                _ringlogger = new Ringlogger(logPath);
-                _ringloggerTunnel = running.Name;
-            }
-
-            foreach (var (_, text) in _ringlogger!.CollectNewLines())
-                LogRaw($"[wg] {text}", LogLevel.Debug);
-        }
-
-
-        // Called by WlanApi callback when connection state changes
-        private void OnWifiChanged()
-        {
-            var wifi = GetCurrentSsid();
-            UpdateStatusDisplay(wifi);
-            if (wifi == _lastWifi) return;
-            _lastWifi = wifi;
-
-            if (wifi != null)
+                Interval = TimeSpan.FromMilliseconds(800)
+            };
+            int retryCount = 0;
+            retryTimer.Tick += (_, _) =>
             {
-                bool isOpen = IsOpenNetwork();
-                // Info level: SSID + security status
-                LogRaw($"WiFi: {wifi}{(isOpen ? "  ⚠ open (no password)" : "  🔒 secured")}", LogLevel.Info);
-                LogRaw($"  [DBG] Network type: {(isOpen ? "Open / no security" : "WPA/WPA2/WPA3 secured")}", LogLevel.Debug);
-            }
-            else
-            {
-                LogRaw("WiFi: disconnected", LogLevel.Info);
-            }
+                retryCount++;
+                if (WifiSvc.CurrentSsid != null || retryCount >= 5)
+                    retryTimer.Stop();
+                else
+                    TryUpdateWifi();
+            };
+            retryTimer.Start();
 
-            if (!_cfg.ManualMode)
-                ApplyRules(wifi);
-        }
+            // Background update check (frequency-based)
+            if (ShouldCheckForUpdates())
+                _ = CheckForUpdatesAsync(silent: true);
 
-        public void UpdateStatusDisplay(string? wifi = null)
-        {
-            wifi ??= GetCurrentSsid();
-            WifiLabel.Text       = wifi ?? Lang.T("StatusNone");
-            WifiLabel.Foreground = wifi != null
-                ? (SolidColorBrush)FindResource("TextPrimary")
-                : (SolidColorBrush)FindResource("TextMuted");
-
-            foreach (var rule in _rules)
-                rule.StatusText = (!string.IsNullOrEmpty(rule.Tunnel) && GetTunnelStatus(rule.Tunnel))
-                    ? "\u25cf active" : "\u2014";
-
-            var active = GetActiveTunnelNames();
-            TunnelLabel.Text       = active.Count > 0 ? string.Join(", ", active) : "\u2014";
-            TunnelLabel.Foreground = active.Count > 0
-                ? (SolidColorBrush)FindResource("Success")
-                : (SolidColorBrush)FindResource("TextMuted");
-
-            ((App)System.Windows.Application.Current).UpdateTrayStatus(TunnelLabel.Text, active.Count);
-            RefreshTunnelEntryStatuses();
-            RefreshQuickConnectButton();
-            RefreshWireGuardLogBtn();
-        }
-
-        private void RegisterWifiEvents()
-        {
-            try
-            {
-                uint result = WlanOpenHandle(2, IntPtr.Zero, out _, out _wlanHandle);
-                if (result != 0) { Log("LogWlanUnavailable", LogLevel.Warn, result); _wlanHandle = IntPtr.Zero; return; }
-
-                // Keep delegate alive — GC would collect it otherwise and crash
-                _wlanCallback = (ref WLAN_NOTIFICATION_DATA data, IntPtr ctx) =>
+            // Managed Portable + different version → offer to overwrite installed version
+            if (AppRunMode == AppRunModeKind.ManagedPortable)
+                Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
                 {
-                    // ACM codes 9 = connected, 10 = disconnected, 21 = roaming
-                    if (data.NotificationSource == WLAN_NOTIFICATION_SOURCE_ACM &&
-                        (data.NotificationCode == 9 || data.NotificationCode == 10 || data.NotificationCode == 21))
+                    var installed = GetInstalledPath();
+                    if (installed == null) return;
+                    string installedExe = System.IO.Path.Combine(installed, "MasselGUARD.exe");
+                    if (!System.IO.File.Exists(installedExe)) return;
+                    try
                     {
-                        // Must marshal back to UI thread
-                        Dispatcher.BeginInvoke(new Action(OnWifiChanged));
+                        var installedVer = System.Diagnostics.FileVersionInfo
+                            .GetVersionInfo(installedExe).FileVersion ?? "0.0.0";
+                        var currentVer   = UpdateChecker.CurrentVersionString;
+
+                        // Prompt whenever versions differ — covers newer, older, or same base with different build
+                        if (NormaliseVersion(currentVer) == NormaliseVersion(installedVer)) return;
+
+                        bool currentIsNewer = IsVersionNewer(currentVer, installedVer);
+                        string msg = currentIsNewer
+                            ? $"This copy of MasselGUARD (v{currentVer}) is newer than the installed version (v{installedVer}).\n\nDo you want to overwrite the installed version with this copy?"
+                            : $"This copy of MasselGUARD (v{currentVer}) differs from the installed version (v{installedVer}).\n\nDo you want to overwrite the installed version with this copy?";
+
+                        if (ShowThemedYesNo(msg, "Update installed version"))
+                            RunInstallPublic();
                     }
-                };
+                    catch { }
+                }));
 
-                WlanRegisterNotification(_wlanHandle, WLAN_NOTIFICATION_SOURCE_ACM, true, _wlanCallback, IntPtr.Zero, IntPtr.Zero, out _);
-                Log("LogWlanActive", LogLevel.Ok);
-            }
-            catch (Exception ex) { Log("LogWlanError", LogLevel.Warn, ex.Message); }
-        }
+            // Portable install prompt (shown when running standalone/portable)
+            if (AppRunMode == AppRunModeKind.Standalone &&
+                !ConfigSvc.Config.SuppressPortableUpdatePrompt)
+                Dispatcher.BeginInvoke(DispatcherPriority.Loaded,
+                    new Action(ShowPortableInstallPrompt));
 
-        // ── Rule logic ───────────────────────────────────────────────────────
+            // Show wizard on first run OR when running a newer version than last wizard run
+            bool isUpgrade = !ConfigSvc.IsFirstRun &&
+                !string.IsNullOrEmpty(ConfigSvc.Config.LastRunVersion) &&
+                UpdateChecker.IsNewerVersion(ConfigSvc.Config.LastRunVersion) == false &&
+                IsVersionNewer(UpdateChecker.CurrentVersionString,
+                    ConfigSvc.Config.LastRunVersion ?? "0.0.0");
 
-        private void ApplyRules(string? ssid)
-        {
-            // Open-network protection: check before any SSID rule or default action.
-            // Only fires when actively connected (ssid != null) and network is open.
-            if (ssid != null
-                && !string.IsNullOrEmpty(_cfg.OpenWifiTunnel)
-                && IsOpenNetwork())
-            {
-                Log("LogOpenWifiActivate", LogLevel.Ok, ssid, _cfg.OpenWifiTunnel);
-                SwitchTo(_cfg.OpenWifiTunnel, Lang.T("TrayReasonOpenWifi"));
-                return;
-            }
-            else if (ssid != null && string.IsNullOrEmpty(_cfg.OpenWifiTunnel) && IsOpenNetwork())
-            {
-                Log("LogOpenWifiNoTunnel", LogLevel.Info, ssid);
-                // Fall through to normal rule processing
-            }
-
-            TunnelRule? match = null;
-            if (ssid != null)
-                match = _cfg.Rules.FirstOrDefault(r =>
-                    string.Equals(r.Ssid.Trim(), ssid.Trim(), StringComparison.OrdinalIgnoreCase));
-
-            if (match != null)
-            {
-                if (string.IsNullOrEmpty(match.Tunnel))
+            if (ConfigSvc.IsFirstRun || isUpgrade)
+                Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
                 {
-                    Log("LogRuleMatchedDisconnect", LogLevel.Ok, ssid ?? "");
-                    DisconnectAll(Lang.T("TrayReasonRule", ssid ?? ""));
-                }
-                else
-                {
-                    Log("LogRuleMatchedActivate", LogLevel.Ok, ssid ?? "", match.Tunnel);
-                    SwitchTo(match.Tunnel, Lang.T("TrayReasonRule", ssid ?? ""));
-                }
-            }
-            else
-            {
-                switch (_cfg.DefaultAction)
-                {
-                    case "disconnect":
-                        Log("LogNoRuleDisconnect", LogLevel.Info, ssid ?? Lang.T("LogWifiDisconnected"));
-                        DisconnectAll(Lang.T("TrayReasonDefault"));
-                        break;
-                    case "activate" when !string.IsNullOrEmpty(_cfg.DefaultTunnel):
-                        Log("LogNoRuleActivate", LogLevel.Info, ssid ?? Lang.T("LogWifiDisconnected"), _cfg.DefaultTunnel);
-                        SwitchTo(_cfg.DefaultTunnel, Lang.T("TrayReasonDefault"));
-                        break;
-                    default:
-                        Log("LogNoRuleNothing", LogLevel.Info, ssid ?? Lang.T("LogWifiDisconnected"));
-                        break;
-                }
-            }
-        }
+                    var wiz = new Views.WizardWindow(this, isUpgrade) { Owner = this };
+                    wiz.ShowDialog();
+                    // Record the version that completed the wizard
+                    ConfigSvc.Config.LastRunVersion = UpdateChecker.CurrentVersionString;
+                    ConfigSvc.Save();
+                }));
 
-        private void DisconnectAll(string? reason = null)
-        {
-            var names = GetActiveTunnelNames();
-            foreach (var name in names)
-                Log("LogStoppedTunnel", LogLevel.Warn, name,
-                    StopTunnel(name) ? Lang.T("LogStoppedTunnelOk") : Lang.T("LogStoppedTunnelFail"));
-            if (names.Count > 0)
+            // Orphan check
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
             {
-                if (reason != null)
-                    ShowTrayPopup(names.Count == 1
-                        ? Lang.T("TrayPopupDisconnectedReason", names[0], reason)
-                        : Lang.T("TrayPopupDisconAllReason", reason));
-                else
-                    ShowTrayPopup(names.Count == 1
-                        ? Lang.T("TrayPopupDisconnected", names[0])
-                        : Lang.T("TrayPopupDisconAll"));
-            }
-        }
-
-        // Show a small toast near the tray when the window is hidden.
-        // Uses a frameless WPF window that auto-dismisses after 3 seconds.
-        internal void ShowTrayPopup(string message)
-        {
-            if (!_cfg.ShowTrayPopupOnSwitch) return;
-            if (IsVisible && WindowState != WindowState.Minimized) return;
-
-            Dispatcher.BeginInvoke(() =>
-            {
-                try
-                {
-                    var popup = new Views.TrayToast(message);
-                    popup.Show();
-                    var timer = new System.Windows.Threading.DispatcherTimer
-                        { Interval = TimeSpan.FromSeconds(6) };
-                    timer.Tick += (_, _) => { timer.Stop(); popup.FadeAndClose(); };
-                    timer.Start();
-                }
-                catch { }
+                var orphans = GetOrphanedServices();
+                if (orphans.Count > 0)
+                    LogSvc.Warn($"⚠ {orphans.Count} orphaned WireGuardTunnel$ service(s) found. " +
+                                "Use Settings → Advanced to remove them.");
             });
         }
 
-        private void SwitchTo(string target, string? reason = null)
+        // ── Taskbar visibility ────────────────────────────────────────────────
+        private void ForceTaskbarButton()
         {
-            // Check availability before attempting connection
-            var entry = _tunnels.FirstOrDefault(t =>
-                string.Equals(t.Name, target, StringComparison.OrdinalIgnoreCase));
-            if (entry != null && !entry.IsAvailable)
-            {
-                Log("LogTunnelUnavailable", LogLevel.Warn, target);
-                Dispatcher.BeginInvoke(() =>
-                    ShowErrorBanner(Lang.T("TunnelConnectUnavailable", target)));
-                return;
-            }
-
-            foreach (var name in GetActiveTunnelNames().Where(n => n != target))
-            {
-                LogRaw($"  [DBG] Stopping conflicting tunnel: {name}", LogLevel.Debug);
-                StopTunnel(name);
-                Log("LogStoppedTunnel", LogLevel.Warn, name, Lang.T("LogStoppedTunnelOk"));
-            }
-
-            if (GetTunnelStatus(target))
-            {
-                Log("LogAlreadyActive", LogLevel.Info, target);
-                return;
-            }
-
-            if (reason != null)
-                LogRaw($"Trigger: {reason}", LogLevel.Info);
-
-            LastError = "";
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            bool ok = StartTunnel(target);
-            sw.Stop();
-
-            Log("LogStartedTunnel", ok ? LogLevel.Ok : LogLevel.Warn, target,
-                ok ? Lang.T("LogTunnelOk") : Lang.T("LogTunnelFailed"));
-            if (ok)
-                LogRaw($"  [DBG] Connected in {sw.ElapsedMilliseconds} ms", LogLevel.Debug);
-            else if (!string.IsNullOrEmpty(LastError))
-                LogRaw("  " + LastError, LogLevel.Warn);
-
-            if (reason != null)
-                ShowTrayPopup(ok
-                    ? Lang.T("TrayPopupConnectedReason",  target, reason)
-                    : Lang.T("TrayPopupConnecting", target));
-            else
-                ShowTrayPopup(ok
-                    ? Lang.T("TrayPopupConnected",  target)
-                    : Lang.T("TrayPopupConnecting", target));
+            var helper = new WindowInteropHelper(this);
+            int style  = GetWindowLong(helper.Handle, GWL_EXSTYLE);
+            style |=  WS_EX_APPWINDOW;
+            style &= ~WS_EX_TOOLWINDOW;
+            SetWindowLong(helper.Handle, GWL_EXSTYLE, style);
         }
 
-        // ── Script execution ──────────────────────────────────────────────────
-        private const string ScriptEmbedPrefix = "@embed:";
-
-        /// <summary>
-        /// Runs a script hook. Value can be:
-        ///   - Empty/null   → nothing
-        ///   - "@embed:..." → inline content, written to a temp file and executed
-        ///   - "*.ps1"      → powershell.exe -ExecutionPolicy Bypass -File &lt;path&gt;
-        ///   - "*.bat"      → cmd.exe /c &lt;path&gt;
-        /// Returns true if no script configured OR if the script exits 0.
-        /// </summary>
-        private bool RunTunnelScript(string? value, string hook, string tunnelName)
+        // ── Activity log rendering ────────────────────────────────────────────
+        private void AppendLogEntry(LogEntry entry)
         {
-            if (string.IsNullOrWhiteSpace(value)) return true;
-
-            string scriptPath;
-            bool   isTempFile = false;
-
-            if (value.StartsWith(ScriptEmbedPrefix, StringComparison.Ordinal))
+            Dispatcher.BeginInvoke(() =>
             {
-                // Inline/embedded script — write to temp file
-                var content = value[ScriptEmbedPrefix.Length..];
-                var ext     = content.TrimStart().StartsWith("#!", StringComparison.Ordinal) ? ".sh"
-                            : content.Contains("powershell", StringComparison.OrdinalIgnoreCase) ? ".ps1"
-                            : ".bat";
-                scriptPath  = Path.Combine(Path.GetTempPath(), $"masselguard_{hook}_{tunnelName}{ext}");
-                File.WriteAllText(scriptPath, content, System.Text.Encoding.UTF8);
-                isTempFile = true;
-                LogRaw($"  [Script] Running embedded {hook} script for {tunnelName}", LogLevel.Info);
-            }
-            else
-            {
-                scriptPath = value;
-                if (!File.Exists(scriptPath))
-                {
-                    LogRaw($"  [Script] {hook} script not found: {scriptPath}", LogLevel.Warn);
-                    return false;
-                }
-                LogRaw($"  [Script] Running {hook}: {Path.GetFileName(scriptPath)}", LogLevel.Info);
-            }
+                var para = new Paragraph { Margin = new Thickness(0), Padding = new Thickness(0) };
 
-            try
-            {
-                var ext = Path.GetExtension(scriptPath).ToLowerInvariant();
-                string exe, args;
-                if (ext == ".ps1")
-                {
-                    exe  = "powershell.exe";
-                    args = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{scriptPath}\"";
-                }
-                else
-                {
-                    exe  = "cmd.exe";
-                    args = $"/c \"{scriptPath}\"";
-                }
-
-                var psi = new ProcessStartInfo(exe, args)
-                {
-                    UseShellExecute        = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError  = true,
-                    CreateNoWindow         = true,
-                };
-                using var proc = Process.Start(psi)!;
-                string stdout = proc.StandardOutput.ReadToEnd().Trim();
-                string stderr = proc.StandardError.ReadToEnd().Trim();
-                proc.WaitForExit(30_000);
-
-                if (!string.IsNullOrEmpty(stdout))
-                    LogRaw($"  [Script] {stdout}", LogLevel.Debug);
-                if (!string.IsNullOrEmpty(stderr))
-                    LogRaw($"  [Script] stderr: {stderr}", LogLevel.Warn);
-
-                bool ok = proc.ExitCode == 0;
-                LogRaw($"  [Script] {hook} exit {proc.ExitCode}{(ok ? "" : " (non-zero)")}", ok ? LogLevel.Info : LogLevel.Warn);
-                return ok;
-            }
-            catch (Exception ex)
-            {
-                LogRaw($"  [Script] {hook} error: {ex.Message}", LogLevel.Warn);
-                return false;
-            }
-            finally
-            {
-                if (isTempFile) try { File.Delete(scriptPath); } catch { }
-            }
-        }
-
-        private static string SvcName(string t) => "WireGuardTunnel$" + t;
-
-        internal static string LastError = "";
-
-        /// <summary>Parses a WireGuard .conf text and returns key fields for debug logging.</summary>
-        private static Dictionary<string, string> ParseTunnelConf(string conf)
-        {
-            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var rawLine in conf.Split('\n'))
-            {
-                var line = rawLine.Trim();
-                if (line.StartsWith('#') || !line.Contains('=')) continue;
-                var eq  = line.IndexOf('=');
-                var key = line[..eq].Trim();
-                var val = line[(eq + 1)..].Trim();
-                // Keep first occurrence of each key
-                if (!result.ContainsKey(key)) result[key] = val;
-            }
-            return result;
-        }
-
-        /// <summary>Logs detailed conf fields at Debug level before/after connecting.</summary>
-        private void LogTunnelDebugInfo(string tunnel, string confText, bool connecting)
-        {
-            if (!ShouldLog(LogLevel.Debug)) return;
-            var fields = ParseTunnelConf(confText);
-
-            if (connecting)
-            {
-                LogRaw($"  [DBG] Connecting: {tunnel}", LogLevel.Debug);
-                if (fields.TryGetValue("Address",    out var addr))
-                    LogRaw($"  [DBG]   Interface address : {addr}",      LogLevel.Debug);
-                if (fields.TryGetValue("DNS",        out var dns))
-                    LogRaw($"  [DBG]   DNS               : {dns}",       LogLevel.Debug);
-                if (fields.TryGetValue("Endpoint",   out var ep))
-                    LogRaw($"  [DBG]   Endpoint          : {ep}",        LogLevel.Debug);
-                if (fields.TryGetValue("AllowedIPs", out var allowed))
-                    LogRaw($"  [DBG]   AllowedIPs        : {allowed}",   LogLevel.Debug);
-                if (fields.TryGetValue("PublicKey",  out var pk))
-                    LogRaw($"  [DBG]   Peer public key   : {pk[..Math.Min(12, pk.Length)]}...", LogLevel.Debug);
-                if (fields.TryGetValue("MTU",        out var mtu))
-                    LogRaw($"  [DBG]   MTU               : {mtu}",       LogLevel.Debug);
-            }
-            else
-            {
-                LogRaw($"  [DBG] Disconnected: {tunnel}", LogLevel.Debug);
-            }
-        }
-
-        // Ensure WireGuardManager (the WireGuard system service) is running.
-        private static void EnsureManagerRunning()
-        {
-            try
-            {
-                using var mgr = new ServiceController("WireGuardManager");
-                if (mgr.Status == ServiceControllerStatus.Stopped ||
-                    mgr.Status == ServiceControllerStatus.Paused)
-                {
-                    mgr.Start();
-                    mgr.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(8));
-                }
-            }
-            catch { }
-        }
-
-        private bool StartTunnel(string tunnel)
-        {
-            LastError = "";
-            var stored = _cfg.Tunnels.FirstOrDefault(t =>
-                string.Equals(t.Name, tunnel, StringComparison.OrdinalIgnoreCase));
-
-            // ── Pre-connect script (runs for all tunnel types) ────────────────
-            if (!string.IsNullOrEmpty(stored?.PreConnectScript))
-                RunTunnelScript(stored.PreConnectScript, "pre-connect", tunnel);
-
-            // ── Local tunnel — tunnel.dll + wireguard.dll ─────────────────────
-            if (stored?.Source == "local")
-            {
-                // Validate DLLs early for a clear error before any SCM call.
-                var dllError = TunnelDll.ValidateDlls();
-                if (dllError != null)
-                { LastError = dllError; return false; }
-
-                // Read the stored .conf from AppData\tunnels\, write a
-                // BOM-free copy to Program Files\MasselGUARD\temp\ for the service.
-                // LocalSystem can read Program Files; AppData is user-scoped.
-                string confPath = ConfPath(tunnel);
-                if (!File.Exists(confPath))
-                {
-                    // Migration: recover from old stored.Path (.conf.dpapi) or inline config
-                    var stored2 = _cfg.Tunnels.FirstOrDefault(t =>
-                        string.Equals(t.Name, tunnel, StringComparison.OrdinalIgnoreCase));
-                    string? recovered = null;
-                    if (!string.IsNullOrEmpty(stored2?.Path) && File.Exists(stored2!.Path))
-                    {
-                        try
-                        {
-                            recovered = stored2.Path.EndsWith(".conf.dpapi",
-                                StringComparison.OrdinalIgnoreCase)
-                                ? DpapiDecrypt(File.ReadAllBytes(stored2.Path))
-                                : File.ReadAllText(stored2.Path, System.Text.Encoding.UTF8);
-                        }
-                        catch { }
-                    }
-                    if (recovered == null && !string.IsNullOrEmpty(stored2?.Config))
-                        recovered = stored2!.Config;
-
-                    if (recovered == null)
-                    { LastError = $"Config file not found: {confPath}"; return false; }
-
-                    // Persist to new location so future connects skip migration
-                    EnsureTunnelsDirExists();
-                    File.WriteAllBytes(confPath, DpapiEncrypt(recovered));
-                    if (stored2 != null) { stored2.Path = confPath; stored2.Config = ""; }
-                    SaveConfig("Tunnel config recovered");
-                    LogRaw($"Migrated '{tunnel}' → {confPath} (DPAPI)", LogLevel.Info);
-                }
-
-                // Decrypt .conf.dpapi → write BOM-free plaintext to SvcTempDir
-                EnsureTunnelsDirExists();
-                string svcConf   = SvcConfPath(tunnel);
-                string plaintext = DpapiDecrypt(File.ReadAllBytes(confPath));
-                WriteSecure(svcConf, plaintext);
-
-                // Debug: log conf fields before connecting
-                LogTunnelDebugInfo(tunnel, plaintext, connecting: true);
-                LogRaw($"  [DBG] Service conf : {svcConf}", LogLevel.Debug);
-
-                bool ok = TunnelDll.Connect(tunnel, svcConf,
-                    msg => LogRaw(msg, LogLevel.Debug), out var err);
-
-                // Delete the plaintext temp file immediately — the service child
-                // process has already parsed the config into the kernel driver and
-                // no longer needs the file on disk.
-                try { File.Delete(svcConf); } catch { }
-
-                if (!ok) { LastError = err; return false; }
-
-                // ── Post-connect script ───────────────────────────────────────
-                if (!string.IsNullOrEmpty(stored?.PostConnectScript))
-                    RunTunnelScript(stored.PostConnectScript, "post-connect", tunnel);
-
-                return true;
-            }
-
-            // ── WireGuard GUI tunnel ──────────────────────────────────────────
-            EnsureManagerRunning();
-            LogRaw($"  [DBG] Starting WG service: {SvcName(tunnel)}", LogLevel.Debug);
-            LogRaw($"  [DBG] WireGuard exe: {WgExe}", LogLevel.Debug);
-
-            try
-            {
-                using var svc = new ServiceController(SvcName(tunnel));
-                if (svc.Status == ServiceControllerStatus.Running) return true;
-                svc.Start();
-                svc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
-                if (!string.IsNullOrEmpty(stored?.PostConnectScript))
-                    RunTunnelScript(stored.PostConnectScript, "post-connect", tunnel);
-                return true;
-            }
-            catch (Exception ex1)
-            {
-                LastError = $"ServiceController: {ex1.Message}";
-            }
-
-            // Fallback: wireguard.exe /installtunnelservice
-            string searched;
-            var conf = FindConfPath(tunnel, out searched);
-            if (conf != null)
-            {
-                if (RunProcess(WgExe, $"/installtunnelservice \"{conf}\"", out var err2))
-                {
-                    System.Threading.Thread.Sleep(1500);
-                    return true;
-                }
-                LastError += $"  wireguard.exe: {err2}";
-            }
-            else
-                LastError += $"  No .conf found. Searched: {searched}";
-
-            return false;
-        }
-
-        private bool StopTunnel(string tunnel)
-        {
-            LastError = "";
-            var stored = _cfg.Tunnels.FirstOrDefault(t =>
-                string.Equals(t.Name, tunnel, StringComparison.OrdinalIgnoreCase));
-
-            // ── Pre-disconnect script (all tunnel types) ──────────────────────
-            if (!string.IsNullOrEmpty(stored?.PreDisconnectScript))
-                RunTunnelScript(stored.PreDisconnectScript, "pre-disconnect", tunnel);
-
-            // ── Local tunnel ──────────────────────────────────────────────────
-            if (stored?.Source == "local")
-            {
-                LogRaw($"  [DBG] Disconnect (local dll): {tunnel}", LogLevel.Debug);
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                TunnelDll.Disconnect(tunnel, out var err);
-                sw.Stop();
-                if (!string.IsNullOrEmpty(err)) LastError = err;
-                try { var f = SvcConfPath(tunnel); if (File.Exists(f)) File.Delete(f); } catch { }
-                LogRaw($"  [DBG] Disconnected in {sw.ElapsedMilliseconds} ms", LogLevel.Debug);
-
-                // ── Post-disconnect script ────────────────────────────────────
-                if (!string.IsNullOrEmpty(stored?.PostDisconnectScript))
-                    RunTunnelScript(stored.PostDisconnectScript, "post-disconnect", tunnel);
-
-                return true;
-            }
-
-            // ── WireGuard tunnel: use ServiceController ───────────────────────
-            LogRaw($"  [DBG] Stopping service: {SvcName(tunnel)}", LogLevel.Debug);
-            try
-            {
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                using var svc = new ServiceController(SvcName(tunnel));
-                if (svc.Status == ServiceControllerStatus.Stopped) return true;
-                svc.Stop();
-                svc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15));
-                sw.Stop();
-                LogRaw($"  [DBG] Service stopped in {sw.ElapsedMilliseconds} ms", LogLevel.Debug);
-
-                // ── Post-disconnect script ────────────────────────────────────
-                if (!string.IsNullOrEmpty(stored?.PostDisconnectScript))
-                    RunTunnelScript(stored.PostDisconnectScript, "post-disconnect", tunnel);
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                LastError = "ServiceController stop: " + ex.Message;
-                return false;
-            }
-        }
-
-        private static bool RunProcess(string exe, string args, out string output)
-        {
-            output = "";
-            try
-            {
-                var psi = new ProcessStartInfo(exe, args)
-                    { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
-                using var p = Process.Start(psi)!;
-                output = p.StandardOutput.ReadToEnd().Trim() + p.StandardError.ReadToEnd().Trim();
-                p.WaitForExit(15000);
-                return p.ExitCode == 0;
-            }
-            catch (Exception ex) { output = ex.Message; return false; }
-        }
-
-        private bool GetTunnelStatus(string tunnel)
-        {
-            var stored = _cfg.Tunnels.FirstOrDefault(t =>
-                string.Equals(t.Name, tunnel, StringComparison.OrdinalIgnoreCase));
-
-            if (stored?.Source == "local")
-                return TunnelDll.IsRunning(tunnel);
-
-            try
-            {
-                using var svc = new ServiceController(SvcName(tunnel));
-                return svc.Status == ServiceControllerStatus.Running;
-            }
-            catch { return false; }
-        }
-
-        private static List<string> GetActiveTunnelNames()
-        {
-            var active = new List<string>();
-
-            // Local tunnels: tracked in TunnelDll._connected (service exits immediately
-            // after tunnel is up, so SCM status is always Stopped for these).
-            foreach (var t in _cfg.Tunnels.Where(t => t.Source == "local"))
-                if (TunnelDll.IsRunning(t.Name))
-                    active.Add(t.Name);
-
-            // WireGuard companion tunnels: live as long as their service is Running.
-            try
-            {
-                foreach (var s in ServiceController.GetServices()
-                    .Where(s => s.ServiceName.StartsWith("WireGuardTunnel$", StringComparison.OrdinalIgnoreCase)
-                             && s.Status == ServiceControllerStatus.Running))
-                {
-                    var name = s.ServiceName.Substring("WireGuardTunnel$".Length);
-                    if (!active.Contains(name, StringComparer.OrdinalIgnoreCase))
-                        active.Add(name);
-                }
-            }
-            catch { }
-
-            return active;
-        }
-
-        // Returns true if a Quick Connect session is currently active.
-        private bool QuickConnectIsActive() =>
-            _quickConnectTunnelName != null
-            && TunnelDll.IsRunning(_quickConnectTunnelName);
-
-        // ── WiFi detection ────────────────────────────────────────────────────
-
-        private static string? GetCurrentSsid()
-        {
-            // Use WlanQueryInterface directly — no process spawn, no event log noise.
-            // Falls back to null (not connected / no adapter) on any error.
-            try
-            {
-                uint result = WlanOpenHandle(2, IntPtr.Zero, out _, out IntPtr tempHandle);
-                if (result != 0 || tempHandle == IntPtr.Zero) return null;
+                // Timestamp uses Theme.LogTimestampColor (a Color, wrap in SolidColorBrush)
+                Brush tsBrush;
                 try
                 {
-                    if (WlanEnumInterfaces(tempHandle, IntPtr.Zero, out IntPtr pList) != 0)
-                        return null;
+                    var col = (System.Windows.Media.Color)FindResource("Theme.LogTimestampColor");
+                    tsBrush = new SolidColorBrush(col);
+                }
+                catch { tsBrush = (Brush)FindResource("TextMuted"); }
+
+                var ts = new Run(entry.Timestamp.ToString("HH:mm:ss") + "  ")
+                {
+                    Foreground = tsBrush
+                };
+
+                Brush msgBrush = entry.Level switch
+                {
+                    LogLevel.Ok    => SafeBrush("Success"),
+                    LogLevel.Warn  => SafeBrush("Danger"),
+                    LogLevel.Info  => SafeBrush("Accent"),
+                    _              => SafeBrush("TextMuted"),
+                };
+
+                string prefix = entry.IsContinuation ? "  ↳ " : "";
+                var msgRun = new Run(prefix + entry.Message) { Foreground = msgBrush };
+
+                para.Inlines.Add(ts);
+                para.Inlines.Add(msgRun);
+                if (LogDocument.Blocks.FirstBlock != null)
+                    LogDocument.Blocks.InsertBefore(LogDocument.Blocks.FirstBlock, para);
+                else
+                    LogDocument.Blocks.Add(para);
+                LogBox.ScrollToHome();
+                LogCountLabel.Text = LogSvc.Entries.Count.ToString();
+            });
+        }
+
+        private Brush SafeBrush(string key)
+        {
+            try { return (Brush)FindResource(key); }
+            catch { return System.Windows.Media.Brushes.Gray; }
+        }
+
+        private void RebuildLog()
+        {
+            LogDocument.Blocks.Clear();
+            foreach (var e in LogSvc.Entries)
+                AppendLogEntry(e);
+            LogCountLabel.Text = LogSvc.Entries.Count.ToString();
+        }
+
+        // ── Tunnel group tab strip (UI-only — ViewModel owns data) ────────────
+        private string _activeGroup    = "";   // empty = pick first visible on first build
+        private bool   _showAllOverride = false;
+
+        public void RebuildTunnelGroupsPublic() => RebuildTunnelGroups();
+
+        private void RebuildTunnelGroups()
+        {
+            TunnelTabButtons.Children.Clear();
+            var all     = _vm.TunnelList;
+            var groups  = ConfigSvc.Config.TunnelGroups;
+            var hidden  = ConfigSvc.Config.HiddenTabs;
+            var defGrp  = ConfigSvc.Config.DefaultGroup ?? "";
+
+            // On first build, select DefaultGroup if set, else first visible group
+            if (string.IsNullOrEmpty(_activeGroup))
+            {
+                _activeGroup = !string.IsNullOrEmpty(defGrp) ? defGrp
+                    : groups.FirstOrDefault(g => !hidden.Contains(g.Name))?.Name
+                    ?? (hidden.Contains("Uncategorized") ? "" : "Uncategorized");
+            }
+
+            int CountFor(string tag) => tag switch
+            {
+                "All"           => all.Count,
+                "Uncategorized" => all.Count(t =>
+                    string.IsNullOrEmpty(t.Group) ||
+                    !groups.Any(g => g.Name == t.Group)),
+                _               => all.Count(t => t.Group == tag),
+            };
+
+            void AddTab(string label, string tag, string? colour = null)
+            {
+                int  count  = CountFor(tag);
+                bool active = tag == _activeGroup;
+
+                // Resolve group colour and compute contrast foreground
+                System.Windows.Media.Brush? tabBg = null;
+                System.Windows.Media.Brush? tabFg = null;
+                if (!string.IsNullOrEmpty(colour))
+                {
                     try
                     {
-                        // pList → WLAN_INTERFACE_INFO_LIST:
-                        //   DWORD dwNumberOfItems  (offset 0)
-                        //   DWORD dwIndex          (offset 4)
-                        //   WLAN_INTERFACE_INFO[]  (offset 8, each 532 bytes)
-                        int count = Marshal.ReadInt32(pList, 0);
-                        for (int i = 0; i < count; i++)
-                        {
-                            // Interface GUID is the first 16 bytes of each WLAN_INTERFACE_INFO
-                            IntPtr itemPtr = pList + 8 + i * 532;
-                            byte[] guidBytes = new byte[16];
-                            Marshal.Copy(itemPtr, guidBytes, 0, 16);
-                            Guid ifGuid = new Guid(guidBytes);
+                        System.Windows.Media.Color? resolvedColor = null;
 
-                            uint result2 = WlanQueryInterface(
-                                tempHandle, ref ifGuid,
-                                WLAN_INTF_OPCODE_CURRENT_CONNECTION,
-                                IntPtr.Zero, out _, out IntPtr pConn,
-                                IntPtr.Zero);
-                            if (result2 != 0 || pConn == IntPtr.Zero) continue;
-                            try
+                        if (colour.StartsWith("#"))
+                        {
+                            // Hex colour string — parse directly
+                            var parsed = (System.Windows.Media.Color)
+                                System.Windows.Media.ColorConverter.ConvertFromString(colour);
+                            tabBg         = new System.Windows.Media.SolidColorBrush(parsed);
+                            resolvedColor = parsed;
+                        }
+                        else
+                        {
+                            // Theme resource key — resolve via FindResource
+                            var res = TryFindResource(colour);
+                            if (res is System.Windows.Media.SolidColorBrush scbRes)
                             {
-                                // WLAN_CONNECTION_ATTRIBUTES layout:
-                                //   isState                (4)  offset 0
-                                //   wlanConnectionMode     (4)  offset 4
-                                //   strProfileName         (512) offset 8   (256 wchars)
-                                //   WLAN_ASSOCIATION_ATTRIBUTES:
-                                //     dot11Ssid:
-                                //       uSSIDLength        (4)  offset 520
-                                //       ucSSID[32]         (32) offset 524
-                                int ssidLen = Marshal.ReadInt32(pConn, 520);
-                                if (ssidLen <= 0 || ssidLen > 32) continue;
-                                byte[] ssidBytes = new byte[ssidLen];
-                                Marshal.Copy(pConn + 524, ssidBytes, 0, ssidLen);
-                                string ssid = System.Text.Encoding.UTF8.GetString(ssidBytes);
-                                if (!string.IsNullOrEmpty(ssid)) return ssid;
+                                tabBg         = scbRes;
+                                resolvedColor = scbRes.Color;
                             }
-                            finally { WlanFreeMemory(pConn); }
+                            else if (res is System.Windows.Media.Color colorRes)
+                            {
+                                tabBg         = new System.Windows.Media.SolidColorBrush(colorRes);
+                                resolvedColor = colorRes;
+                            }
+                        }
+
+                        // Compute contrast foreground from resolved colour
+                        if (resolvedColor.HasValue)
+                        {
+                            var c = resolvedColor.Value;
+                            // Relative luminance (sRGB)
+                            double Linearise(double v) => v <= 0.04045 ? v / 12.92 : Math.Pow((v + 0.055) / 1.055, 2.4);
+                            double L = 0.2126 * Linearise(c.R / 255.0)
+                                     + 0.7152 * Linearise(c.G / 255.0)
+                                     + 0.0722 * Linearise(c.B / 255.0);
+                            tabFg = L > 0.179
+                                ? System.Windows.Media.Brushes.Black
+                                : System.Windows.Media.Brushes.White;
                         }
                     }
-                    finally { WlanFreeMemory(pList); }
+                    catch { }
                 }
-                finally { WlanCloseHandle(tempHandle, IntPtr.Zero); }
+
+                bool hideCount = ConfigSvc.Config.AlwaysHideTunnelCount;
+                var btn = new Button
+                {
+                    Content         = hideCount ? label : $"{label}  {count}",
+                    Tag             = tag,
+                    Style           = (Style)FindResource("FlatBtn"),
+                    Background      = active && tabBg != null ? tabBg :
+                                      active ? (Brush)FindResource("Surface") :
+                                      tabBg ?? Brushes.Transparent,
+                    BorderThickness = new Thickness(0, 0, 0, active ? 2 : 0),
+                    BorderBrush     = active
+                        ? (tabBg != null ? tabBg : (Brush)FindResource("Accent"))
+                        : Brushes.Transparent,
+                    Foreground      = tabFg ??
+                                      (active ? (Brush)FindResource("Accent")
+                                               : (Brush)FindResource("TextMuted")),
+                    FontSize        = 9,
+                    Padding         = new Thickness(8, 2, 8, 2),
+                    FontWeight      = active ? FontWeights.Bold : FontWeights.Normal,
+                    Margin          = new Thickness(0, 0, 2, 0),
+                };
+                btn.Click += TunnelTab_Click;
+                btn.AllowDrop = true;
+                btn.DragOver  += TunnelTabDragOver;
+                btn.Drop      += TunnelTabDrop;
+                TunnelTabButtons.Children.Add(btn);
             }
-            catch { }
+
+            bool hideEmpty = ConfigSvc.Config.HideEmptyGroups;
+
+            // Custom groups — skip hidden (unless override) and empty (if toggle on)
+            foreach (var g in groups)
+            {
+                if (!_showAllOverride && hidden.Contains(g.Name)) continue;
+                if (hideEmpty && CountFor(g.Name) == 0) continue;
+                AddTab(g.Name, g.Name, string.IsNullOrEmpty(g.Color) ? null : g.Color);
+            }
+
+            // Uncategorized — skip if hidden (unless override) or empty (if toggle on)
+            bool uncatHidden = !_showAllOverride && hidden.Contains("Uncategorized");
+            bool uncatEmpty  = hideEmpty && CountFor("Uncategorized") == 0;
+            if (!uncatHidden && !uncatEmpty)
+                AddTab(Lang.T("TabUncategorized"), "Uncategorized");
+
+            // If active group is no longer visible (hidden or empty), fall to first visible
+            bool IsTabVisible(string tag) {
+                if (tag == "Uncategorized")
+                    return (_showAllOverride || !hidden.Contains("Uncategorized"))
+                        && (!hideEmpty || CountFor("Uncategorized") > 0);
+                var g2 = groups.FirstOrDefault(g => g.Name == tag);
+                if (g2 == null) return false;
+                return (_showAllOverride || !hidden.Contains(tag))
+                    && (!hideEmpty || CountFor(tag) > 0);
+            }
+
+            if (!IsTabVisible(_activeGroup))
+            {
+                var first = groups.FirstOrDefault(g => IsTabVisible(g.Name));
+                _activeGroup = first?.Name
+                    ?? (IsTabVisible("Uncategorized") ? "Uncategorized" : "");
+            }
+
+            ApplyGroupFilter();
+            UpdateHiddenCountBadge();
+        }
+
+        private void TunnelTab_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag is string tag)
+            {
+                _activeGroup = tag;
+                RebuildTunnelGroups();
+            }
+        }
+
+        private void HiddenCountBtn_Click(object sender, RoutedEventArgs e)
+        {
+            _showAllOverride = !_showAllOverride;
+            if (!_showAllOverride)
+            {
+                var hidden    = ConfigSvc.Config.HiddenTabs;
+                var groups    = ConfigSvc.Config.TunnelGroups;
+                bool hideEmpty = ConfigSvc.Config.HideEmptyGroups;
+                // If active group is now invisible, pick first visible
+                bool stillVisible = _activeGroup == "Uncategorized"
+                    ? !hidden.Contains("Uncategorized") && (!hideEmpty || _vm.TunnelList.Any(t => string.IsNullOrEmpty(t.Group) || !groups.Any(g=>g.Name==t.Group)))
+                    : !hidden.Contains(_activeGroup) && (!hideEmpty || _vm.TunnelList.Any(t=>t.Group==_activeGroup));
+                if (!stillVisible)
+                {
+                    var first = groups.FirstOrDefault(g => !hidden.Contains(g.Name) && (!hideEmpty || _vm.TunnelList.Any(t=>t.Group==g.Name)));
+                    _activeGroup = first?.Name
+                        ?? (!hidden.Contains("Uncategorized") ? "Uncategorized" : "");
+                }
+            }
+            RebuildTunnelGroups();
+        }
+
+        private void UpdateHiddenCountBadge()
+        {
+            // Never show when toggle is on
+            if (ConfigSvc.Config.AlwaysHideTunnelCount)
+            {
+                HiddenCountBadge.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            var hidden = ConfigSvc.Config.HiddenTabs;
+            var all    = _vm.TunnelList;
+
+            int total       = all.Count;
+            int hiddenCount = all.Count(t =>
+                string.IsNullOrEmpty(t.Group)
+                    ? hidden.Contains("Uncategorized")
+                    : hidden.Contains(t.Group));
+            int visible = total - hiddenCount;
+
+            if (hiddenCount == 0 && !_showAllOverride)
+            {
+                // All tunnels visible, no override — hide the badge
+                HiddenCountBadge.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            HiddenCountBadge.Visibility = Visibility.Visible;
+            HiddenCountBtn.IsEnabled    = hiddenCount > 0;
+
+            if (_showAllOverride)
+            {
+                // Override active — show plain total in accent with border
+                HiddenCountBtn.Content      = total.ToString();
+                HiddenCountBtn.Foreground   = (Brush)FindResource("Accent");
+                HiddenCountBadge.Background = (Brush)FindResource("BorderColor");
+                HiddenCountBadge.BorderThickness = new Thickness(1);
+                HiddenCountBadge.BorderBrush     = (Brush)FindResource("Accent");
+                HiddenCountBadge.CornerRadius    = new System.Windows.CornerRadius(8);
+                HiddenCountBtn.ToolTip = "Override active: showing all tunnels. Click to restore hidden groups.";
+            }
+            else
+            {
+                // Hidden tunnels exist — show x/y, no border
+                HiddenCountBtn.Content      = $"{visible}/{total}";
+                HiddenCountBtn.Foreground   = (Brush)FindResource("TextMuted");
+                HiddenCountBadge.Background = (Brush)FindResource("BorderColor");
+                HiddenCountBadge.BorderThickness = new Thickness(0);
+                HiddenCountBadge.BorderBrush     = Brushes.Transparent;
+                HiddenCountBadge.CornerRadius    = new System.Windows.CornerRadius(8);
+                HiddenCountBtn.ToolTip = "Some tunnels hidden by group settings. Click to show all.";
+            }
+        }
+
+        private void ApplyGroupFilter()
+        {
+            var all    = _vm.TunnelList;
+            var groups = ConfigSvc.Config.TunnelGroups;
+
+            if (_activeGroup == "Uncategorized")
+                TunnelsListView.ItemsSource = all
+                    .Where(t => string.IsNullOrEmpty(t.Group) ||
+                                !groups.Any(g => g.Name == t.Group))
+                    .ToList();
+            else
+                TunnelsListView.ItemsSource = all
+                    .Where(t => t.Group == _activeGroup)
+                    .ToList();
+        }
+
+        private void TunnelTabDragOver(object sender, DragEventArgs e)
+        {
+            e.Effects = e.Data.GetDataPresent("TunnelEntry")
+                ? DragDropEffects.Move : DragDropEffects.None;
+            e.Handled = true;
+        }
+
+        private void TunnelTabDrop(object sender, DragEventArgs e)
+        {
+            if (sender is not Button btn) return;
+            if (e.Data.GetData("TunnelEntry") is not TunnelEntryViewModel vm) return;
+            var tag = btn.Tag as string ?? "";
+
+            var stored = ConfigSvc.Config.Tunnels
+                .FirstOrDefault(t => t.Name == vm.Name);
+            if (stored == null) return;
+
+            stored.Group = tag == "Uncategorized" ? "" : tag;
+            ConfigSvc.Save();
+            LogSvc.Ok($"Tunnel \"{stored.Name}\" moved to group \"{(string.IsNullOrEmpty(stored.Group) ? "Uncategorized" : stored.Group)}\"");
+            _vm.RebuildTunnelList();
+            RebuildTunnelGroups();
+        }
+
+        // ── Tunnel drag-to-reorder ────────────────────────────────────────────
+        private TunnelEntryViewModel? _dragItem;
+        private System.Windows.Point  _dragStart;
+        private DropLineAdorner?      _dropAdorner;
+
+        private void TunnelItem_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is System.Windows.Controls.ListViewItem item &&
+                item.DataContext is TunnelEntryViewModel vm)
+            {
+                _dragItem  = vm;
+                _dragStart = e.GetPosition(null);
+            }
+        }
+
+        private void TunnelList_PreviewMouseMove(object sender, MouseEventArgs e)
+        {
+            if (e.LeftButton != MouseButtonState.Pressed || _dragItem == null) return;
+            var pos  = e.GetPosition(null);
+            var diff = _dragStart - pos;
+            if (Math.Abs(diff.X) < SystemParameters.MinimumHorizontalDragDistance &&
+                Math.Abs(diff.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+
+            // Dim the source row
+            SetItemOpacity(_dragItem, 0.4);
+
+            DragDrop.DoDragDrop(TunnelsListView,
+                new DataObject("TunnelEntry", _dragItem), DragDropEffects.Move);
+
+            // Cleanup after DoDragDrop returns
+            SetItemOpacity(_dragItem, 1.0);
+            RemoveDropLine();
+            _dragItem = null;
+        }
+
+        private void TunnelList_DragOver(object sender, DragEventArgs e)
+        {
+            if (!e.Data.GetDataPresent("TunnelEntry"))
+            { e.Effects = DragDropEffects.None; e.Handled = true; return; }
+            e.Effects = DragDropEffects.Move;
+            e.Handled = true;
+
+            var target = GetItemUnderCursor<TunnelEntryViewModel>(
+                TunnelsListView, e.GetPosition(TunnelsListView));
+            if (target == null || target == _dragItem) { RemoveDropLine(); return; }
+
+            var container = TunnelsListView.ItemContainerGenerator
+                .ContainerFromItem(target) as System.Windows.Controls.ListViewItem;
+            if (container == null) return;
+
+            var posInItem = e.GetPosition(container);
+            bool above    = posInItem.Y < container.ActualHeight / 2;
+            var  linePos  = container.TranslatePoint(
+                above ? new System.Windows.Point(0, 0)
+                      : new System.Windows.Point(0, container.ActualHeight),
+                TunnelsListView).Y - 1;
+
+            if (_dropAdorner == null)
+            {
+                var layer = System.Windows.Documents.AdornerLayer
+                    .GetAdornerLayer(TunnelsListView);
+                if (layer != null)
+                {
+                    _dropAdorner = new DropLineAdorner(TunnelsListView);
+                    layer.Add(_dropAdorner);
+                }
+            }
+            _dropAdorner?.SetY(linePos);
+        }
+
+        private void TunnelList_Drop(object sender, DragEventArgs e)
+        {
+            RemoveDropLine();
+            if (!e.Data.GetDataPresent("TunnelEntry")) return;
+            if (e.Data.GetData("TunnelEntry") is not TunnelEntryViewModel dragged) return;
+
+            var target = GetItemUnderCursor<TunnelEntryViewModel>(
+                TunnelsListView, e.GetPosition(TunnelsListView));
+            if (target == null || target == dragged) return;
+
+            var tunnels = ConfigSvc.Config.Tunnels;
+            int fromIdx = tunnels.FindIndex(t => t.Name == dragged.Name);
+            int toIdx   = tunnels.FindIndex(t => t.Name == target.Name);
+            if (fromIdx < 0 || toIdx < 0 || fromIdx == toIdx) return;
+
+            var moved = tunnels[fromIdx];
+            tunnels.RemoveAt(fromIdx);
+            tunnels.Insert(toIdx, moved);
+            ConfigSvc.Save();
+            _vm.RebuildTunnelList();
+            RebuildTunnelGroups();
+        }
+
+        private void RemoveDropLine()
+        {
+            if (_dropAdorner == null) return;
+            var layer = System.Windows.Documents.AdornerLayer
+                .GetAdornerLayer(TunnelsListView);
+            layer?.Remove(_dropAdorner);
+            _dropAdorner = null;
+        }
+
+        private void SetItemOpacity(TunnelEntryViewModel vm, double opacity)
+        {
+            var container = TunnelsListView.ItemContainerGenerator
+                .ContainerFromItem(vm) as System.Windows.Controls.ListViewItem;
+            if (container != null) container.Opacity = opacity;
+        }
+
+        private static T? GetItemUnderCursor<T>(System.Windows.Controls.ListView lv,
+            System.Windows.Point pos) where T : class
+        {
+            var hit = VisualTreeHelper.HitTest(lv, pos);
+            if (hit == null) return null;
+            var dep = hit.VisualHit as DependencyObject;
+            while (dep != null)
+            {
+                if (dep is System.Windows.Controls.ListViewItem li) return li.DataContext as T;
+                dep = VisualTreeHelper.GetParent(dep);
+            }
             return null;
         }
 
-        // Returns true when the current WiFi connection has no security
-        // (dot11AuthAlgorithmOpen with no cipher — i.e. a genuinely open network).
-        // WLAN_CONNECTION_ATTRIBUTES layout (offsets):
-        //   isState              4   offset 0
-        //   wlanConnectionMode   4   offset 4
-        //   strProfileName     512   offset 8
-        //   WLAN_ASSOCIATION_ATTRIBUTES:
-        //     dot11Ssid:
-        //       uSSIDLength      4   offset 520
-        //       ucSSID[32]      32   offset 524
-        //     dot11BssType       4   offset 556
-        //     dot11MacAddress    6   offset 560 (+2 pad)
-        //     lRssi              4   offset 568
-        //     uLinkQuality       4   offset 572
-        //     bRxTxOnSameChannel 1   offset 576
-        //   WLAN_SECURITY_ATTRIBUTES:
-        //     bSecurityEnabled   4   offset 580
-        // bSecurityEnabled == 0 → open network
-        private static bool IsOpenNetwork()
+        private void TunnelsListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            try
-            {
-                uint res = WlanOpenHandle(2, IntPtr.Zero, out _, out IntPtr h);
-                if (res != 0 || h == IntPtr.Zero) return false;
-                try
-                {
-                    if (WlanEnumInterfaces(h, IntPtr.Zero, out IntPtr pList) != 0)
-                        return false;
-                    try
-                    {
-                        int count = Marshal.ReadInt32(pList, 0);
-                        for (int i = 0; i < count; i++)
-                        {
-                            IntPtr item = pList + 8 + i * 532;
-                            byte[] g = new byte[16];
-                            Marshal.Copy(item, g, 0, 16);
-                            Guid ifGuid = new Guid(g);
-                            uint r2 = WlanQueryInterface(h, ref ifGuid,
-                                WLAN_INTF_OPCODE_CURRENT_CONNECTION,
-                                IntPtr.Zero, out _, out IntPtr pConn, IntPtr.Zero);
-                            if (r2 != 0 || pConn == IntPtr.Zero) continue;
-                            try
-                            {
-                                int secEnabled = Marshal.ReadInt32(pConn, 580);
-                                if (secEnabled == 0) return true;
-                            }
-                            finally { WlanFreeMemory(pConn); }
-                        }
-                    }
-                    finally { WlanFreeMemory(pList); }
-                }
-                finally { WlanCloseHandle(h, IntPtr.Zero); }
-            }
-            catch { }
-            return false;
+            _vm.SelectedTunnel = TunnelsListView.SelectedItem as TunnelEntryViewModel;
+            EditTunnelBtn.IsEnabled   = _vm.SelectedTunnel != null;
+            DeleteTunnelBtn.IsEnabled = _vm.SelectedTunnel != null;
+            DeleteTunnelBtn.Visibility = _vm.SelectedTunnel != null
+                ? Visibility.Visible : Visibility.Collapsed;
+            if (_vm.SelectedTunnel != null)
+                DeleteTunnelBtn.Content = GetDeleteButtonLabel(_vm.SelectedTunnel.StoredTunnel);
         }
 
-        // ── Config ────────────────────────────────────────────────────────────
+        private static string GetDeleteButtonLabel(StoredTunnel t) =>
+            t.Source == "local"
+                ? Lang.T("BtnDeleteTunnel")
+                : Lang.T("BtnUnlinkTunnel");
 
-        private void LoadConfig()
+        private void TunnelToggle_Click(object sender, RoutedEventArgs e)
         {
-            try
+            if (sender is Button btn &&
+                btn.DataContext is TunnelEntryViewModel entry)
             {
-                if (File.Exists(ConfigPath))
-                {
-                    var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                    _cfg = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath), opts) ?? new AppConfig();
-                }
+                if (entry.IsActive)
+                    entry.DisconnectCommand.Execute(null);
                 else
-                {
-                    _firstRun = true;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log("LogConfigLoadError", LogLevel.Warn, ex.Message);
-                _cfg = new AppConfig();
-            }
-            finally
-            {
-                _rules.Clear();
-                foreach (var r in _cfg.Rules) _rules.Add(r);
+                    entry.ConnectCommand.Execute(null);
 
-                RefreshTunnelDropdowns();
+                _vm.RefreshTunnelStatus();
+                UpdateTunnelLabel();
             }
         }
 
-        private void SaveConfig(string? changeDescription = null)
+        // ── Dialog dispatchers (called by ViewModel events) ───────────────────
+        private void OnAddTunnel()
         {
-            try
-            {
-                _cfg.Rules = _rules.ToList();
-                Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
-                File.WriteAllText(ConfigPath,
-                    JsonSerializer.Serialize(_cfg, new JsonSerializerOptions { WriteIndented = true }));
-
-                // Normal: always show "Settings saved" when called without description
-                // Extended: always show the specific change detail
-                if (!string.IsNullOrEmpty(changeDescription))
-                {
-                    // Always show change detail at Ok level (visible in Normal + Extended)
-                    LogRaw($"Saved: {changeDescription}", LogLevel.Ok);
-                }
-                else
-                {
-                    // Silent save (e.g. on tunnel connect) — only log in Extended
-                    LogRaw("Settings saved.", LogLevel.Debug);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log("LogConfigSaveError", LogLevel.Warn, ex.Message);
-                System.Windows.MessageBox.Show("Failed to save:\n" + ex.Message, "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        // ── UI events ──────────────────────────────────────────────────────────
-
-
-        // ── Tunnel management ──────────────────────────────────────────────────
-
-        /// <summary>
-        // ── Tunnel storage ─────────────────────────────────────────────────────
-        // Encrypted tunnels  → <ExeDir>\tunnels\<n>.conf.dpapi
-        //   DPAPI CurrentUser scope — only the owning user can decrypt.
-        //   ACL on each file: SYSTEM + Administrators + owning user only.
-        //
-        // Temp conf files    → %ProgramFiles%\MasselGUARD\temp\<n>.conf
-        //   Plaintext without BOM, written just before the service starts,
-        //   deleted on disconnect. ACL: SYSTEM + Administrators + current user.
-        //   Located in Program Files so LocalSystem can always read it.
-        //
-        // Storage : %AppData%\MasselGUARD\tunnels\   (DPAPI CurrentUser encrypted)
-        // Temp    : %ProgramFiles%\MasselGUARD\temp\  (plaintext, service-readable, ACL-locked)
-        private static readonly string TunnelStorageDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "MasselGUARD", "tunnels");
-
-        // Temp dir for the plaintext copy the LocalSystem service process reads.
-        // In Program Files so the inherited ACL already grants SYSTEM access;
-        // we additionally lock it to SYSTEM + Administrators + current user.
-        private static readonly string SvcTempDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-            "MasselGUARD", "temp");
-
-        public static string TunnelStorageDirPublic => TunnelStorageDir;
-
-        // Returns the DPAPI-encrypted .conf.dpapi path for a stored local tunnel
-        private static string ConfPath(string name) =>
-            Path.Combine(TunnelStorageDir, SafeName(name) + ".conf.dpapi");
-
-        // Returns the temp plaintext .conf path used by the service
-        private static string SvcConfPath(string name) =>
-            Path.Combine(SvcTempDir, SafeName(name) + ".conf");
-
-        // Returns true if a .conf.dpapi with this name exists on disk regardless
-        // of which user created it — used to enforce global name uniqueness.
-        private static bool TunnelFileExists(string name) =>
-            File.Exists(ConfPath(name));
-
-        // Returns a filesystem- and SCM-safe version of the tunnel name.
-        // Replaces spaces and backslashes with underscores, then strips any
-        // remaining characters that are invalid in file names or service names.
-        // The original display name is stored separately in config.json.
-        private static string SafeName(string name)
-        {
-            // Spaces and backslashes are explicitly not allowed in Windows service
-            // names and cause path issues in the SCM binary path argument.
-            var safe = name.Replace(' ', '_').Replace('\\', '_');
-            // Strip any other characters invalid in file names
-            foreach (var c in System.IO.Path.GetInvalidFileNameChars())
-                safe = safe.Replace(c, '_');
-            return safe;
-        }
-
-        // ── DPAPI helpers ─────────────────────────────────────────────────────
-        // Encrypt with CurrentUser scope — only this user (on this machine) can decrypt.
-        private static byte[] DpapiEncrypt(string plainText)
-        {
-            var bytes = System.Text.Encoding.UTF8.GetBytes(plainText);
-            return System.Security.Cryptography.ProtectedData.Protect(
-                bytes, null,
-                System.Security.Cryptography.DataProtectionScope.CurrentUser);
-        }
-
-        private static string DpapiDecrypt(byte[] cipherBytes)
-        {
-            var bytes = System.Security.Cryptography.ProtectedData.Unprotect(
-                cipherBytes, null,
-                System.Security.Cryptography.DataProtectionScope.CurrentUser);
-            return System.Text.Encoding.UTF8.GetString(bytes);
-        }
-
-        // ── ACL helpers ───────────────────────────────────────────────────────
-
-        private static void ApplySecureAcl(string path, bool isDirectory = false)
-        {
-            try
-            {
-                var flags = System.Security.AccessControl.InheritanceFlags.None;
-                var prop  = System.Security.AccessControl.PropagationFlags.None;
-                if (isDirectory)
-                {
-                    flags = System.Security.AccessControl.InheritanceFlags.ContainerInherit |
-                            System.Security.AccessControl.InheritanceFlags.ObjectInherit;
-                }
-
-                System.Security.AccessControl.FileSystemSecurity acl = isDirectory
-                    ? new System.IO.DirectoryInfo(path).GetAccessControl()
-                    : new System.IO.FileInfo(path).GetAccessControl();
-
-                acl.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-
-                foreach (System.Security.AccessControl.FileSystemAccessRule r in
-                    acl.GetAccessRules(true, true,
-                        typeof(System.Security.Principal.SecurityIdentifier)))
-                    acl.RemoveAccessRule(r);
-
-                void Add(System.Security.Principal.IdentityReference id) =>
-                    acl.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
-                        id,
-                        System.Security.AccessControl.FileSystemRights.FullControl,
-                        flags, prop,
-                        System.Security.AccessControl.AccessControlType.Allow));
-
-                Add(new System.Security.Principal.SecurityIdentifier(
-                    System.Security.Principal.WellKnownSidType.LocalSystemSid, null));
-                Add(new System.Security.Principal.SecurityIdentifier(
-                    System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null));
-                Add(System.Security.Principal.WindowsIdentity.GetCurrent().User!);
-
-                if (isDirectory)
-                    new System.IO.DirectoryInfo(path).SetAccessControl(
-                        (System.Security.AccessControl.DirectorySecurity)acl);
-                else
-                    new System.IO.FileInfo(path).SetAccessControl(
-                        (System.Security.AccessControl.FileSecurity)acl);
-            }
-            catch { /* best-effort */ }
-        }
-
-        // Creates a plaintext file with the correct ACL in one atomic step.
-        // Using FileStream + FileSecurity at open-time means the file is
-        // protected from the moment it is created — no inherited-ACL window.
-        private static void WriteSecure(string path, string text)
-        {
-            var fileSec = new System.Security.AccessControl.FileSecurity();
-            fileSec.SetAccessRuleProtection(isProtected: true,
-                preserveInheritance: false);
-
-            void Add(System.Security.Principal.IdentityReference id) =>
-                fileSec.AddAccessRule(
-                    new System.Security.AccessControl.FileSystemAccessRule(
-                        id,
-                        System.Security.AccessControl.FileSystemRights.FullControl,
-                        System.Security.AccessControl.InheritanceFlags.None,
-                        System.Security.AccessControl.PropagationFlags.None,
-                        System.Security.AccessControl.AccessControlType.Allow));
-
-            Add(new System.Security.Principal.SecurityIdentifier(
-                System.Security.Principal.WellKnownSidType.LocalSystemSid, null));
-            Add(new System.Security.Principal.SecurityIdentifier(
-                System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null));
-            Add(System.Security.Principal.WindowsIdentity.GetCurrent().User!);
-
-            // The 7-arg FileStream(path,mode,rights,share,buf,opts,security) constructor
-            // was removed in .NET 6+. Instead: create the file empty, apply the ACL
-            // immediately (before any data is written), then write content.
-            // The file exists for a few microseconds with no content — the ACL is set
-            // before the first byte of plaintext is written.
-            using (var empty = File.Create(path)) { /* creates empty, inherits parent ACL */ }
-            new FileInfo(path).SetAccessControl(fileSec);  // lock ACL before writing
-            using var sw = new StreamWriter(
-                new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.None),
-                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-            sw.Write(text);
-        }
-
-        private static void EnsureTunnelsDirExists()
-        {
-            // tunnels\ — plain user folder, no special ACL needed.
-            if (!Directory.Exists(TunnelStorageDir))
-                Directory.CreateDirectory(TunnelStorageDir);
-
-            // temp\ — SYSTEM + Administrators + current user only.
-            if (!Directory.Exists(SvcTempDir))
-            {
-                Directory.CreateDirectory(SvcTempDir);
-                ApplySecureAcl(SvcTempDir, isDirectory: true);
-            }
-        }
-
-        // Tunnels directory ACL:
-        //   SYSTEM + Administrators  → FullControl (inherited)
-        //   Authenticated Users      → ListDirectory + ReadAttributes (dir only, no inherit)
-        // This lets any local user check whether a tunnel name is taken without
-        // being able to read the encrypted content of another user's .conf.dpapi.
-        private static void ApplyTunnelsDirAcl(string dirPath)
-        {
-            try
-            {
-                var acl = new System.IO.DirectoryInfo(dirPath).GetAccessControl();
-                acl.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-
-                var inheritAll = System.Security.AccessControl.InheritanceFlags.ContainerInherit |
-                                 System.Security.AccessControl.InheritanceFlags.ObjectInherit;
-                var noInherit  = System.Security.AccessControl.InheritanceFlags.None;
-                var noProp     = System.Security.AccessControl.PropagationFlags.None;
-                var allow      = System.Security.AccessControl.AccessControlType.Allow;
-
-                acl.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
-                    new System.Security.Principal.SecurityIdentifier(
-                        System.Security.Principal.WellKnownSidType.LocalSystemSid, null),
-                    System.Security.AccessControl.FileSystemRights.FullControl,
-                    inheritAll, noProp, allow));
-
-                acl.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
-                    new System.Security.Principal.SecurityIdentifier(
-                        System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null),
-                    System.Security.AccessControl.FileSystemRights.FullControl,
-                    inheritAll, noProp, allow));
-
-                // Authenticated Users: list the directory only — not read file content
-                acl.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
-                    new System.Security.Principal.SecurityIdentifier(
-                        System.Security.Principal.WellKnownSidType.AuthenticatedUserSid, null),
-                    System.Security.AccessControl.FileSystemRights.ListDirectory |
-                    System.Security.AccessControl.FileSystemRights.ReadAttributes |
-                    System.Security.AccessControl.FileSystemRights.Traverse,
-                    noInherit, noProp, allow));
-
-                new System.IO.DirectoryInfo(dirPath).SetAccessControl(acl);
-            }
-            catch { /* best-effort */ }
-        }
-
-        // ── Tunnel CRUD ───────────────────────────────────────────────────────
-
-        private void SaveTunnelConfig(string name, string config,
-            string source = "local", string? filePath = null, string group = "",
-            string preConnect = "", string postConnect = "",
-            string preDisconnect = "", string postDisconnect = "")
-        {
-            if (source == "local")
-            {
-                EnsureTunnelsDirExists();
-
-                // Global duplicate check: if the file exists and is not in this
-                // user's config, it belongs to another user on the same machine.
-                var existingEntry = _cfg.Tunnels.FirstOrDefault(t =>
-                    string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
-                if (existingEntry == null && TunnelFileExists(name))
-                    throw new InvalidOperationException(
-                        Lang.T("TunnelNameTakenGlobally", name));
-
-                filePath = ConfPath(name);              // DPAPI-encrypted .conf.dpapi
-                File.WriteAllBytes(filePath, DpapiEncrypt(config));
-                config = "";    // don't store plaintext in config.json
-            }
-
-            var existing = _cfg.Tunnels.FirstOrDefault(t =>
-                string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
-            if (existing != null)
-            {
-                existing.Config  = config;
-                existing.Source  = source;
-                existing.Path    = filePath;
-                existing.Group   = group;
-                existing.PreConnectScript     = preConnect;
-                existing.PostConnectScript    = postConnect;
-                existing.PreDisconnectScript  = preDisconnect;
-                existing.PostDisconnectScript = postDisconnect;
-            }
-            else
-            {
-                _cfg.Tunnels.Add(new StoredTunnel
-                {
-                    Name = name, Config = config, Source = source, Path = filePath, Group = group,
-                    PreConnectScript = preConnect, PostConnectScript = postConnect,
-                    PreDisconnectScript = preDisconnect, PostDisconnectScript = postDisconnect,
-                });
-            }
-            SaveConfig($"Tunnel saved: {name}");
-        }
-
-        private string? LoadTunnelConfig(string name)
-        {
-            var stored = _cfg.Tunnels.FirstOrDefault(t =>
-                string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
-            if (stored == null) return null;
-
-            if (!string.IsNullOrEmpty(stored.Path) && File.Exists(stored.Path))
-            {
-                if (stored.Path.EndsWith(".conf.dpapi", StringComparison.OrdinalIgnoreCase))
-                    return DpapiDecrypt(File.ReadAllBytes(stored.Path));
-                return File.ReadAllText(stored.Path, System.Text.Encoding.UTF8);
-            }
-            // Fallback: plaintext stored inline in config.json
-            return string.IsNullOrEmpty(stored.Config) ? null : stored.Config;
-        }
-
-        private void DeleteTunnelConfig(string name)
-        {
-            var stored = _cfg.Tunnels.FirstOrDefault(t =>
-                string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
-            if (stored?.Source == "local")
-            {
-                // Delete the stored .conf file
-                if (!string.IsNullOrEmpty(stored.Path) && File.Exists(stored.Path))
-                    try { File.Delete(stored.Path); } catch { }
-                // Also try canonical path in case Path is stale
-                var canonical = ConfPath(name);
-                if (File.Exists(canonical)) try { File.Delete(canonical); } catch { }
-            }
-            _cfg.Tunnels.RemoveAll(t =>
-                string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
-            SaveConfig();
-        }
-
-
-        private void TunnelsListView_SelectionChanged(object sender,
-            System.Windows.Controls.SelectionChangedEventArgs e)
-        {
-            // Sync _selectedTunnel from actual ListView selection when the user clicks a row
-            if (TunnelsListView.SelectedItem is TunnelEntry listSel)
-                _selectedTunnel = listSel;
-
-            var entry    = _selectedTunnel;
-            bool sel     = entry != null;
-            bool isLocal = entry?.Type == TunnelType.Local;
-            bool isWg    = entry?.Type == TunnelType.WireGuard;
-            bool avail   = entry?.IsAvailable ?? false;
-
-            // Edit enabled for both local and WireGuard tunnels — WG edit opens
-            // a metadata-only dialog (group, notes) since we don't own the conf file
-            EditTunnelBtn.IsEnabled = sel;
-
-            // The action button morphs based on the selected tunnel type/state:
-            //  • WireGuard-linked  → "Unlink"  (removes from list, keeps WG conf)
-            //  • Local, unavailable → "Remove" (cleans up the stale entry)
-            //  • Local, available   → "Delete" (deletes the encrypted conf file)
-            if (!sel)
-            {
-                DeleteTunnelBtn.Visibility = Visibility.Collapsed;
-                DeleteTunnelBtn.IsEnabled  = false;
-            }
-            else if (isWg)
-            {
-                DeleteTunnelBtn.Visibility = Visibility.Visible;
-                DeleteTunnelBtn.IsEnabled  = true;
-                DeleteTunnelBtn.Content    = Lang.T("ImportUnlinkWireGuard");
-            }
-            else if (!avail)
-            {
-                DeleteTunnelBtn.Visibility = Visibility.Visible;
-                DeleteTunnelBtn.IsEnabled  = true;
-                DeleteTunnelBtn.Content    = Lang.T("BtnRemoveTunnel");
-            }
-            else
-            {
-                DeleteTunnelBtn.Visibility = Visibility.Visible;
-                DeleteTunnelBtn.IsEnabled  = true;
-                DeleteTunnelBtn.Content    = Lang.T("BtnDeleteTunnel");
-            }
-        }
-
-        private void AddTunnel_Click(object sender, RoutedEventArgs e)
-        {
-            var dlg = new Views.TunnelConfigDialog { Owner = this };
+            var groupNames = ConfigSvc.Config.TunnelGroups.Select(g => g.Name).ToList();
+            var dlg = new Views.TunnelConfigDialog(groupNames: groupNames) { Owner = this };
             if (dlg.ShowDialog() != true) return;
-            SaveTunnelConfig(dlg.ResultName!, dlg.ResultConfig!, group: dlg.ResultGroup,
-                preConnect: dlg.ResultPreConnectScript, postConnect: dlg.ResultPostConnectScript,
-                preDisconnect: dlg.ResultPreDisconnectScript, postDisconnect: dlg.ResultPostDisconnectScript);
-            Log("TunnelSavedLog", LogLevel.Ok, dlg.ResultName!);
-            RefreshTunnelDropdowns();
+            var stored = new StoredTunnel
+            {
+                Name                = dlg.ResultName ?? "",
+                Config              = dlg.ResultConfig ?? "",
+                Source              = "local",
+                Group               = dlg.ResultGroup,
+                PreConnectScript    = dlg.ResultPreConnectScript,
+                PostConnectScript   = dlg.ResultPostConnectScript,
+                PreDisconnectScript = dlg.ResultPreDisconnectScript,
+                PostDisconnectScript= dlg.ResultPostDisconnectScript,
+            };
+            ConfigSvc.Config.Tunnels.Add(stored);
+            ConfigSvc.Save();
+            LogSvc.Ok($"Tunnel added: {stored.Name}");
+            _vm.RebuildTunnelList();
+            RebuildTunnelGroups();
         }
 
-        private void EditTunnel_Click(object sender, RoutedEventArgs e)
+        private void OnEditTunnel(StoredTunnel stored)
         {
-            if (_selectedTunnel is not TunnelEntry entry) return;
+            bool isDefault = ConfigSvc.Config.DefaultTunnel    == stored.Name
+                          && ConfigSvc.Config.DefaultAction == "activate";
+            bool isOpen    = ConfigSvc.Config.OpenWifiTunnel   == stored.Name;
 
-            var stored = _cfg.Tunnels.FirstOrDefault(t =>
-                string.Equals(t.Name, entry.Name, StringComparison.OrdinalIgnoreCase));
+            var groupNames = ConfigSvc.Config.TunnelGroups.Select(g => g.Name).ToList();
+            var dlg = stored.Source == "local"
+                ? (Window)new Views.TunnelConfigDialog(
+                    stored.Name, stored.Config, stored.Group,
+                    stored.PreConnectScript, stored.PostConnectScript,
+                    stored.PreDisconnectScript, stored.PostDisconnectScript,
+                    isDefault, isOpen, groupNames)
+                    { Owner = this }
+                : new Views.TunnelMetadataDialog(
+                    stored.Name, stored.Group, stored.Notes,
+                    ConfigSvc.Config.TunnelGroups.Select(g=>g.Name).ToList(),
+                    stored.PreConnectScript, stored.PostConnectScript,
+                    stored.PreDisconnectScript, stored.PostDisconnectScript,
+                    isDefault, isOpen)
+                    { Owner = this };
 
-            if (entry.Type == TunnelType.WireGuard)
+            if (dlg.ShowDialog() != true) return;
+
+            bool newDefault, newOpen;
+
+            if (dlg is Views.TunnelConfigDialog tcd)
             {
-                // WireGuard-linked tunnels: metadata only (group + notes)
-                // We don't own the .conf file so we cannot edit connection params.
-                var mdlg = new Views.TunnelMetadataDialog(
-                    entry.Name,
-                    stored?.Group ?? "",
-                    stored?.Notes ?? "",
-                    _cfg.TunnelGroups.Select(g => g.Name).ToList(),
-                    stored?.PreConnectScript    ?? "",
-                    stored?.PostConnectScript   ?? "",
-                    stored?.PreDisconnectScript ?? "",
-                    stored?.PostDisconnectScript ?? "")
-                { Owner = this };
+                stored.Name                 = tcd.ResultName ?? stored.Name;
+                stored.Config               = tcd.ResultConfig ?? stored.Config;
+                stored.Group                = tcd.ResultGroup;
+                stored.PreConnectScript     = tcd.ResultPreConnectScript;
+                stored.PostConnectScript    = tcd.ResultPostConnectScript;
+                stored.PreDisconnectScript  = tcd.ResultPreDisconnectScript;
+                stored.PostDisconnectScript = tcd.ResultPostDisconnectScript;
+                newDefault = tcd.ResultIsDefault;
+                newOpen    = tcd.ResultIsOpenProtection;
+            }
+            else if (dlg is Views.TunnelMetadataDialog tmd)
+            {
+                stored.Group                = tmd.ResultGroup;
+                stored.Notes                = tmd.ResultNotes;
+                stored.PreConnectScript     = tmd.ResultPreConnectScript;
+                stored.PostConnectScript    = tmd.ResultPostConnectScript;
+                stored.PreDisconnectScript  = tmd.ResultPreDisconnectScript;
+                stored.PostDisconnectScript = tmd.ResultPostDisconnectScript;
+                newDefault = tmd.ResultIsDefault;
+                newOpen    = tmd.ResultIsOpenProtection;
+            }
+            else return;
 
-                if (mdlg.ShowDialog() != true) return;
+            // Apply default action
+            if (newDefault)
+            {
+                ConfigSvc.Config.DefaultAction = "activate";
+                ConfigSvc.Config.DefaultTunnel = stored.Name;
+            }
+            else if (isDefault) // was default, now unchecked → clear
+            {
+                ConfigSvc.Config.DefaultAction = "none";
+                ConfigSvc.Config.DefaultTunnel = "";
+            }
 
-                if (stored == null)
-                {
-                    stored = new StoredTunnel
-                        { Name = entry.Name, Source = "wireguard", Path = entry.Name };
-                    _cfg.Tunnels.Add(stored);
-                }
-                stored.Group                = mdlg.ResultGroup;
-                stored.Notes                = mdlg.ResultNotes;
-                stored.PreConnectScript     = mdlg.ResultPreConnectScript;
-                stored.PostConnectScript    = mdlg.ResultPostConnectScript;
-                stored.PreDisconnectScript  = mdlg.ResultPreDisconnectScript;
-                stored.PostDisconnectScript = mdlg.ResultPostDisconnectScript;
-                SaveConfig($"Tunnel metadata updated: {entry.Name}");
-                Log("TunnelSavedLog", LogLevel.Ok, entry.Name);
-                RefreshTunnelDropdowns();
+            // Apply open network protection
+            if (newOpen)
+                ConfigSvc.Config.OpenWifiTunnel = stored.Name;
+            else if (isOpen)
+                ConfigSvc.Config.OpenWifiTunnel = "";
+
+            ConfigSvc.Save();
+            _vm.RebuildTunnelList();
+            RebuildTunnelGroups();
+            NotifyAllBadges();
+            UpdateStatusBarCentre();
+            LogSvc.Ok($"Tunnel updated: {stored.Name}");
+        }
+
+        private void OnDeleteTunnel(StoredTunnel stored)
+        {
+            var msg = stored.Source == "local"
+                ? Lang.T("ConfirmDeleteTunnel", stored.Name)
+                : Lang.T("ConfirmUnlinkTunnel", stored.Name);
+
+            if (MessageBox.Show(msg, "MasselGUARD",
+                    MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
                 return;
-            }
 
-            // Local tunnel — full editor
-            var config        = LoadTunnelConfig(entry.Name);
-            var existingGroup = stored?.Group ?? "";
-            var dlg = new Views.TunnelConfigDialog(
-                entry.Name, config, existingGroup,
-                stored?.PreConnectScript    ?? "",
-                stored?.PostConnectScript   ?? "",
-                stored?.PreDisconnectScript ?? "",
-                stored?.PostDisconnectScript ?? "")
-            { Owner = this };
-            if (dlg.ShowDialog() != true) return;
-
-            if (!string.Equals(dlg.ResultName, entry.Name, StringComparison.OrdinalIgnoreCase))
-                DeleteTunnelConfig(entry.Name);
-
-            SaveTunnelConfig(dlg.ResultName!, dlg.ResultConfig!, group: dlg.ResultGroup,
-                preConnect: dlg.ResultPreConnectScript, postConnect: dlg.ResultPostConnectScript,
-                preDisconnect: dlg.ResultPreDisconnectScript, postDisconnect: dlg.ResultPostDisconnectScript);
-            Log("TunnelSavedLog", LogLevel.Ok, dlg.ResultName!);
-            RefreshTunnelDropdowns();
+            ConfigSvc.Config.Tunnels.Remove(stored);
+            ConfigSvc.Save();
+            LogSvc.Ok($"Tunnel removed: {stored.Name}");
+            _vm.RebuildTunnelList();
+            RebuildTunnelGroups();
         }
 
-        private void ImportTunnel_Click(object sender, RoutedEventArgs e)
+        private void OnQuickConnect() => QuickConnect_Click(this, new RoutedEventArgs());
+
+        private void OnOpenSettings()
         {
-            var alreadyImported = new HashSet<string>(
-                _cfg.Tunnels.Select(t => t.Name),
-                StringComparer.OrdinalIgnoreCase);
-            var dlg = new Views.ImportTunnelDialog(alreadyImported, _cfg.Mode)
+            var win = new Views.SettingsWindow(this) { Owner = this };
+            win.ShowDialog();
+            // Refresh after settings close
+            LogSvc.IsExtended = ConfigSvc.Config.LogLevelSetting == "extended";
+            _vm.RebuildTunnelList();
+            RebuildTunnelGroups();
+            UpdateFooterLabel();
+            UpdateThemeToggleIcon();
+        }
+
+        // ── Button click handlers (thin — delegate to VM or OnXxx) ────────────
+        private void AddTunnel_Click(object s, RoutedEventArgs e)     => _vm.AddTunnelCommand.Execute(null);
+        private void EditTunnel_Click(object s, RoutedEventArgs e)    => _vm.EditTunnelCommand.Execute(null);
+        private void DeleteTunnel_Click(object s, RoutedEventArgs e)  => _vm.DeleteTunnelCommand.Execute(null);
+        private void SettingsBtn_Click(object s, RoutedEventArgs e)   => _vm.OpenSettingsCommand.Execute(null);
+        private void ExportLog_Click(object s, RoutedEventArgs e)     => _vm.ExportLogCommand.Execute(null);
+
+        private void ImportTunnel_Click(object s, RoutedEventArgs e)
+        {
+            var alreadyImported = new System.Collections.Generic.HashSet<string>(
+                ConfigSvc.Config.Tunnels.Select(t=>t.Name), StringComparer.OrdinalIgnoreCase);
+            var dlg = new Views.ImportTunnelDialog(alreadyImported, ConfigSvc.Config.Mode)
                 { Owner = this };
-            dlg.TunnelImported += (name, config, source, path) =>
-                SaveImportedTunnel(name, config, source, path);
+            string? lastImported = null;
+            dlg.TunnelImported += (name, cfg2, src, path) =>
+            {
+                var st = new StoredTunnel { Name=name, Config=cfg2, Source=src, Path=path };
+                ConfigSvc.Config.Tunnels.Add(st);
+                lastImported = name;
+            };
             dlg.ShowDialog();
-        }
-
-        // Unlink a WireGuard-companion tunnel: removes config.json entry only,
-        // does not delete any file since the conf belongs to the WireGuard app.
-        public void UnlinkWireGuardTunnel(string name)
-        {
-            var confirm = ShowDialog(
-                Lang.T("ImportUnlinkConfirm", name),
-                Lang.T("ImportUnlinkTitle"),
-                MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (confirm != MessageBoxResult.Yes) return;
-            // Remove from config only — do not delete the WireGuard app's file
-            _cfg.Tunnels.RemoveAll(t =>
-                string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
-            SaveConfig($"Tunnel unlinked: {name}");
-            Log("TunnelDeletedLog", LogLevel.Warn, name);
-            RefreshTunnelDropdowns();
-        }
-
-        private void SaveImportedTunnel(string name, string config, string source = "local", string? path = null)
-        {
-            // Sanitise name
-            foreach (var c in Path.GetInvalidFileNameChars())
-                name = name.Replace(c, '_');
-
-            // Duplicate check: first in this user's own config, then globally on disk.
-            bool inMyConfig  = _cfg.Tunnels.Any(t =>
-                string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
-            bool takenByOther = !inMyConfig && TunnelFileExists(name);
-
-            if (takenByOther)
+            if (lastImported != null)
             {
-                // Another user on this machine already has a tunnel with this name.
-                // Refuse silently with an informational dialog — no overwrite option.
-                ShowDialog(
-                    Lang.T("TunnelNameTakenGlobally", name),
-                    Lang.T("ImportDuplicateTitle"),
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-            if (inMyConfig)
-            {
-                var overwrite = ShowDialog(
-                    Lang.T("ImportDuplicate", name),
-                    Lang.T("ImportDuplicateTitle"),
-                    MessageBoxButton.YesNo, MessageBoxImage.Question);
-                if (overwrite != MessageBoxResult.Yes) return;
-            }
-
-            try
-            {
-                SaveTunnelConfig(name, config, source, path);
-                Log("TunnelImportedLog", LogLevel.Ok, name);
-                Dispatcher.BeginInvoke(RefreshTunnelDropdowns);
-            }
-            catch (Exception ex)
-            {
-                Log("ImportFailed", LogLevel.Warn, ex.Message);
-            }
-        }
-
-        private void DeleteTunnel_Click(object sender, RoutedEventArgs e)
-        {
-            if (_selectedTunnel is not TunnelEntry entry) return;
-
-            if (entry.Type == TunnelType.WireGuard)
-            {
-                // WireGuard-linked: unlink (remove from list, keep WG app conf)
-                UnlinkWireGuardTunnel(entry.Name);
-                return;
-            }
-
-            if (!entry.IsAvailable)
-            {
-                // Unavailable local tunnel: remove stale entry without confirmation
-                // (the encrypted file is already gone so there is nothing to lose)
-                var confirm = ShowDialog(
-                    Lang.T("RemoveTunnelConfirm", entry.Name),
-                    Lang.T("RemoveTunnelTitle"),
-                    MessageBoxButton.YesNo, MessageBoxImage.Question);
-                if (confirm != MessageBoxResult.Yes) return;
-                _cfg.Tunnels.RemoveAll(t =>
-                    string.Equals(t.Name, entry.Name,
-                        StringComparison.OrdinalIgnoreCase));
-                SaveConfig();
-                Log("TunnelDeletedLog", LogLevel.Warn, entry.Name);
-                RefreshTunnelDropdowns();
-                return;
-            }
-
-            // Local available tunnel: confirm + delete encrypted file
-            var del = ShowDialog(
-                Lang.T("DeleteTunnelConfirm", entry.Name),
-                Lang.T("DeleteTunnelTitle"),
-                MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (del != MessageBoxResult.Yes) return;
-            DeleteTunnelConfig(entry.Name);
-            Log("TunnelDeletedLog", LogLevel.Warn, entry.Name);
-            RefreshTunnelDropdowns();
-        }
-
-        private void RefreshTunnelDropdowns()
-        {
-            var tunnels = GetAvailableTunnels();
-
-            // Only log tunnel discovery at startup or when mode changes — not on every refresh
-            if (!_startupComplete)
-            {
-                LogRaw(Lang.T("LogTunnelDiscovery", tunnels.Count) +
-                    (tunnels.Count > 0 ? Lang.T("LogTunnelDiscoveryList", string.Join(", ", tunnels)) : "") +
-                    Lang.T("LogInstallDir", _cfg.InstallDirectory ?? "none"), LogLevel.Info);
-            }
-
-            // Preserve the currently selected tunnel name so we can restore it after rebuild
-            var selectedName = _selectedTunnel?.Name;
-
-            // Rebuild tunnel entry list
-            var active      = GetActiveTunnelNames();
-            var wgInstalled = FindWireGuardExe() != null;
-            _tunnels.Clear();
-            foreach (var t in tunnels)
-            {
-                var stored = _cfg.Tunnels.FirstOrDefault(s =>
-                    string.Equals(s.Name, t, StringComparison.OrdinalIgnoreCase));
-                var isLocal = stored?.Source != "wireguard";
-                _tunnels.Add(new TunnelEntry
-                {
-                    Name               = t,
-                    Active             = active.Contains(t),
-                    Type               = isLocal ? TunnelType.Local : TunnelType.WireGuard,
-                    WireGuardInstalled = wgInstalled,
-                    Group              = stored?.Group ?? "",
-                    Notes              = stored?.Notes ?? "",
-                });
-            }
-
-            // Rebuild tray menu
-            ((App)System.Windows.Application.Current).RebuildTrayTunnelMenu(tunnels, active);
-
-            TunnelCountLabel.Text = tunnels.Count.ToString();
-
-            // Check availability
-            CheckTunnelAvailability();
-            UpdateCountBadges();
-
-            // Rebuild the tab/ListView and restore selection by name
-            RebuildTunnelGroups(restoreSelection: selectedName);
-        }
-
-        private void UpdateCountBadges()
-        {
-            TunnelCountLabel.Text = _tunnels.Count.ToString();
-        }
-
-        // Called from UpdateStatusDisplay to refresh live Active flags without rebuilding
-        private void RefreshTunnelEntryStatuses()
-        {
-            var active      = GetActiveTunnelNames();
-            var wgInstalled = FindWireGuardExe() != null;
-            foreach (var e in _tunnels)
-            {
-                e.WireGuardInstalled = wgInstalled;
-                e.Active = active.Contains(e.Name);
-            }
-
-            // Inject or update the synthetic Quick Connect entry.
-            SyncQuickConnectEntry();
-
-            ((App)System.Windows.Application.Current).RebuildTrayTunnelMenu(
-                _tunnels.Select(t => t.Name).ToList(), active);
-
-            // Do NOT call RebuildTunnelGroups here — TunnelEntry implements INPC so
-            // the ListView updates in-place. Rebuilding clears _selectedTunnel and
-            // replaces ItemsSource on every timer tick, causing laggy selection.
-        }
-
-        // ── Grouped tunnel panel ──────────────────────────────────────────────
-        // Builds the tab strip and filters TunnelsListView per active tab.
-        // Each section has a header row (▶/▼ + name + count) and a body
-        // containing one tunnel row per TunnelEntry in that group.
-        // ── Tab-based grouped tunnel view ─────────────────────────────────────
-        // Tracks which group tab is currently shown. "" = Uncategorized.
-        private string _activeGroupTab = "__ALL__";
-
-        private void RebuildTunnelGroups(string? restoreSelection = null)
-        {
-            // Build buckets: group name → entries
-            var configuredNames = _cfg.TunnelGroups
-                .Select(g => g.Name)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            var buckets = new Dictionary<string, List<TunnelEntry>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var g in _cfg.TunnelGroups)
-                buckets[g.Name] = new List<TunnelEntry>();
-            buckets["__UNCATEGORIZED__"] = new List<TunnelEntry>();
-
-            foreach (var t in _tunnels)
-            {
-                var key = !string.IsNullOrEmpty(t.Group) && configuredNames.Contains(t.Group)
-                    ? t.Group : "__UNCATEGORIZED__";
-                buckets[key].Add(t);
-            }
-
-            // Build tab strip
-            TunnelTabButtons.Children.Clear();
-
-            AddTabButton(Lang.T("TunnelTabAll"), "__ALL__", _tunnels.ToList(), buckets);
-
-            foreach (var g in _cfg.TunnelGroups)
-            {
-                var entries = buckets.TryGetValue(g.Name, out var b) ? b : new List<TunnelEntry>();
-                AddTabButton(g.Name, g.Name, entries, buckets);
-            }
-
-            var uncat = buckets["__UNCATEGORIZED__"];
-            AddTabButton(Lang.T("TunnelGroupUngrouped"), "__UNCATEGORIZED__", uncat, buckets);
-
-            // Make sure active tab still exists; fall back to All
-            bool tabExists = _activeGroupTab == "__ALL__" || _activeGroupTab == "__UNCATEGORIZED__" ||
-                             _cfg.TunnelGroups.Any(g => string.Equals(g.Name, _activeGroupTab,
-                                 StringComparison.OrdinalIgnoreCase));
-            if (!tabExists) _activeGroupTab = "__ALL__";
-
-            ApplyActiveTab(buckets, restoreSelection);
-        }
-
-        private void AddTabButton(string label, string key,
-            List<TunnelEntry> entries,
-            Dictionary<string, List<TunnelEntry>> buckets)
-        {
-            bool isActive = string.Equals(_activeGroupTab, key, StringComparison.OrdinalIgnoreCase);
-
-            var btn = new System.Windows.Controls.Button
-            {
-                Content         = $"{label} ({entries.Count})",
-                FontSize        = 9,
-                Padding         = new Thickness(8, 2, 8, 2),
-                BorderThickness = new Thickness(0, 0, 0, isActive ? 2 : 0),
-                BorderBrush     = isActive
-                    ? (System.Windows.Media.Brush)FindResource("Accent")
-                    : System.Windows.Media.Brushes.Transparent,
-                Background      = System.Windows.Media.Brushes.Transparent,
-                Foreground      = isActive
-                    ? (System.Windows.Media.Brush)FindResource("Accent")
-                    : (System.Windows.Media.Brush)FindResource("TextMuted"),
-                FontWeight      = isActive ? FontWeights.Bold : FontWeights.Normal,
-                Cursor          = System.Windows.Input.Cursors.Hand,
-            };
-
-            // Use a minimal no-hover-chrome style for tab buttons
-            btn.Style = (Style)FindResource("FlatBtn");
-            btn.Padding         = new Thickness(8, 2, 8, 2);   // override FlatBtn default
-            btn.BorderThickness = new Thickness(0, 0, 0, isActive ? 2 : 0);
-            btn.BorderBrush = isActive
-                ? (System.Windows.Media.Brush)FindResource("Accent")
-                : System.Windows.Media.Brushes.Transparent;
-
-            string capturedKey = key;
-            btn.Click += (_, _) =>
-            {
-                _activeGroupTab = capturedKey;
-                _selectedTunnel = null;
+                ConfigSvc.Save();
+                LogSvc.Ok($"Tunnel imported: {lastImported}");
+                _vm.RebuildTunnelList();
                 RebuildTunnelGroups();
+            }
+        }
+
+        // ── Quick Connect ─────────────────────────────────────────────────────
+        private void QuickConnect_Click(object sender, RoutedEventArgs e)
+        {
+            var ofd = new Microsoft.Win32.OpenFileDialog
+            {
+                Title  = Lang.T("QuickConnectTitle"),
+                Filter = "WireGuard config (*.conf;*.conf.dpapi)|*.conf;*.conf.dpapi",
+            };
+            if (ofd.ShowDialog() != true) return;
+
+            var stored = new StoredTunnel
+            {
+                Name   = System.IO.Path.GetFileNameWithoutExtension(ofd.FileName)
+                              .Replace(".conf", ""),
+                Source = "local",
+                Path   = ofd.FileName,
             };
 
-            TunnelTabButtons.Children.Add(btn);
+            TunnelSvc.Connect(stored, ConfigSvc.Config);
+            _vm.RebuildTunnelList();
+            _vm.RefreshTunnelStatus();
+            UpdateTunnelLabel();
         }
 
-        private void ApplyActiveTab(Dictionary<string, List<TunnelEntry>> buckets,
-                                    string? restoreSelection = null)
+        // ── WireGuard client helpers ──────────────────────────────────────────
+        private string WireGuardExe =>
+            ConfigSvc.Config.WgExePath ?? "wireguard";
+
+        internal void OpenWireGuardGui()
         {
-            List<TunnelEntry> visible;
-            if (_activeGroupTab == "__ALL__")
-                visible = _tunnels.ToList();
-            else if (buckets.TryGetValue(_activeGroupTab, out var b))
-                visible = b;
-            else
-                visible = new List<TunnelEntry>();
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                WireGuardExe) { UseShellExecute = true }); }
+            catch (Exception ex) { LogSvc.Warn($"WireGuard: {ex.Message}"); }
+        }
 
-            // Swap the ListView source in-place without touching _selectedTunnel
-            TunnelsListView.ItemsSource =
-                new System.Collections.ObjectModel.ObservableCollection<TunnelEntry>(visible);
 
-            // Restore selection by name after source swap
-            if (restoreSelection != null)
+        private int _lastTrayActiveCount = -1; // -1 forces initial update
+
+        private void OnStatusTick()
+        {
+            string? serviceSsid = WifiSvc.CurrentSsid;
+            UpdateWifiLabel(serviceSsid);
+            UpdateTunnelLabel();
+
+            // Only redraw tray icon when active tunnel count actually changes
+            int activeCount = _vm.TunnelList.Count(t => t.IsActive);
+            if (activeCount != _lastTrayActiveCount)
             {
-                var match = visible.FirstOrDefault(e =>
-                    string.Equals(e.Name, restoreSelection, StringComparison.OrdinalIgnoreCase));
-                if (match != null)
-                {
-                    _selectedTunnel = match;
-                    TunnelsListView.SelectedItem = match;
-                }
-                else
-                {
-                    _selectedTunnel = null;
-                }
+                _lastTrayActiveCount = activeCount;
+                var activeEntry = _vm.TunnelList.FirstOrDefault(t => t.IsActive);
+                ((App)Application.Current).UpdateTrayStatus(
+                    activeEntry?.Name ?? "", activeCount);
             }
-
-            TunnelsListView_SelectionChanged(this, null!);
         }
 
-        // Selection tracking for the grouped panel (kept for Edit/Delete toolbar sync)
-        private readonly Dictionary<TunnelEntry, System.Windows.Controls.Border> _tunnelRowBorders = new();
-
-        private void SelectTunnelEntry(TunnelEntry entry, System.Windows.Controls.Border? rowBorder = null)
+        // ── Status bar ────────────────────────────────────────────────────────
+        private void OnWifiChanged(string? ssid, bool isOpen)
         {
-            _selectedTunnel = entry;
-            TunnelsListView_SelectionChanged(this, null!);
-        }
-
-        // Keeps a synthetic TunnelEntry for the active Quick Connect session
-        // in sync with _tunnels so it appears in the list and can be disconnected
-        // by clicking its toggle button like any other tunnel.
-        private void SyncQuickConnectEntry()
-        {
-            const string QcPrefix = "⚡ ";
-            bool qcActive = QuickConnectIsActive();
-
-            // Remove stale QC entry (session ended or name changed)
-            var stale = _tunnels.Where(t => t.Name.StartsWith(QcPrefix)).ToList();
-            foreach (var s in stale)
-                if (!qcActive || !string.Equals(s.Name,
-                        QcPrefix + _quickConnectDisplayName,
-                        StringComparison.OrdinalIgnoreCase))
-                    _tunnels.Remove(s);
-
-            if (!qcActive) return;
-
-            string displayName = QcPrefix + (_quickConnectDisplayName ?? "Quick Connect");
-            var existing = _tunnels.FirstOrDefault(t =>
-                string.Equals(t.Name, displayName, StringComparison.OrdinalIgnoreCase));
-            if (existing != null)
+            Dispatcher.BeginInvoke(() =>
             {
-                existing.Active = true;
-                return;
-            }
-
-            // Insert at top of list so it is immediately visible
-            _tunnels.Insert(0, new TunnelEntry
-            {
-                Name               = displayName,
-                Active             = true,
-                Type               = TunnelType.Local,
-                WireGuardInstalled = true,
-                IsAvailable        = true,
+                UpdateWifiLabel(ssid);
+                _vm.ApplyWifiState(ssid, isOpen);
+                // Give tunnel service a moment to connect, then refresh tunnel label
+                Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
+                    new Action(() =>
+                    {
+                        _vm.RefreshTunnelStatus();
+                        UpdateTunnelLabel();
+                    }));
             });
         }
 
-        public void ManualStart(string tunnel)
+        private void TryUpdateWifi()
         {
-            Log("LogManualConnect", LogLevel.Info, tunnel);
-            LastError = "";
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            bool ok = StartTunnel(tunnel);
-            sw.Stop();
-            Log("LogManualConnectResult", ok ? LogLevel.Ok : LogLevel.Warn, tunnel,
-                ok ? Lang.T("TunnelStatusConnected") : Lang.T("LogTunnelFailed"));
-            if (ok)  LogRaw($"  [DBG] Connected in {sw.ElapsedMilliseconds} ms", LogLevel.Debug);
-            if (!ok && !string.IsNullOrEmpty(LastError)) LogRaw("  " + LastError, LogLevel.Warn);
+            var (ssid, isOpen) = WifiSvc.QueryCurrentSsid();
+            UpdateWifiLabel(ssid);
+            _vm.ApplyWifiState(ssid, isOpen);
         }
 
-        public void ManualStop(string tunnel)
+        private void UpdateWifiLabel(string? ssid)
         {
-            Log("LogManualDisconnect", LogLevel.Info, tunnel);
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            bool ok = StopTunnel(tunnel);
-            sw.Stop();
-            Log("LogManualConnectResult", ok ? LogLevel.Ok : LogLevel.Warn, tunnel,
-                ok ? Lang.T("TunnelStatusDisconnected") : Lang.T("LogTunnelFailed"));
-            if (ok) LogRaw($"  [DBG] Disconnected in {sw.ElapsedMilliseconds} ms", LogLevel.Debug);
+            WifiLabel.Text = string.IsNullOrEmpty(ssid)
+                ? Lang.T("StatusNoWifi")
+                : ssid;
         }
 
-        // ── Tunnel availability ────────────────────────────────────────────────
-
-        /// <summary>
-        /// Checks whether each tunnel's config file still exists.
-        /// Marks unavailable tunnels visually and logs a warning for newly unavailable ones.
-        /// Called on startup and every time the window is shown.
-        /// </summary>
-        private void CheckTunnelAvailability()
+        private void UpdateTunnelLabel()
         {
-            var wgInstalled = FindWireGuardExe() != null;
-            foreach (var entry in _tunnels)
-            {
-                bool available = IsTunnelConfigAvailable(entry.Name, entry.Type);
-                if (!available && entry.IsAvailable)
-                    Log("LogTunnelUnavailable", LogLevel.Warn, entry.Name);
-                entry.IsAvailable          = available;
-                entry.WireGuardInstalled   = wgInstalled;
-            }
-        }
+            var active = _vm.TunnelList.FirstOrDefault(t => t.IsActive);
+            TunnelLabel.Text = active?.Name ?? Lang.T("StatusNone");
+            TunnelLabel.Foreground = active != null
+                ? (Brush)FindResource("Success")
+                : (Brush)FindResource("TextMuted");
 
-        private static bool IsTunnelConfigAvailable(string name, TunnelType type)
-        {
-            var stored = _cfg.Tunnels.FirstOrDefault(t =>
-                string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
-            if (stored == null) return false;
-
-            if (stored.Source == "local")
-                return File.Exists(ConfPath(name));   // .conf.dpapi in tunnels\
-
-            // WireGuard tunnel: original file path must still exist
-            return !string.IsNullOrEmpty(stored.Path) && File.Exists(stored.Path);
-        }
-
-        private void ShowErrorBanner(string message)
-        {
-            ErrorBannerText.Text    = message;
-            ErrorBanner.Visibility  = System.Windows.Visibility.Visible;
-        }
-
-        private void DismissBanner_Click(object sender, RoutedEventArgs e)
-        {
-            ErrorBanner.Visibility = System.Windows.Visibility.Collapsed;
-        }
-
-        private async void TunnelToggle_Click(object sender, RoutedEventArgs e)
-        {
-            if ((sender as System.Windows.Controls.Button)?.DataContext is not TunnelEntry entry) return;
-
-            // Quick Connect synthetic entry: route to QuickConnect_Click which
-            // already handles the active→disconnect toggle internally.
-            if (entry.Name.StartsWith("⚡ ", StringComparison.Ordinal))
-            {
-                QuickConnect_Click(sender, e);
-                return;
-            }
-
-            // Disable the button while the operation is in progress so the user
-            // cannot double-click and to give visual feedback.
-            if (sender is System.Windows.Controls.Button btn) btn.IsEnabled = false;
-            try
-            {
-                if (entry.Active)
-                {
-                    // StopTunnel calls ServiceController and waits — run off UI thread.
-                    await System.Threading.Tasks.Task.Run(() => ManualStop(entry.Name));
-                }
-                else
-                {
-                    // StartTunnel → TunnelDll.Connect → InstallAndStart blocks up to 30 s.
-                    // Running it on a thread-pool thread keeps the UI responsive.
-                    await System.Threading.Tasks.Task.Run(() => ManualStart(entry.Name));
-                }
-            }
-            finally
-            {
-                if (sender is System.Windows.Controls.Button b) b.IsEnabled = true;
-                UpdateStatusDisplay();
-            }
-        }
-
-        // ── Install / Uninstall ────────────────────────────────────────────────
-
-        private static readonly string InstallRegKey =
-            @"SOFTWARE\MasselGUARD";
-        private static readonly string InstallFolderName =
-            "MasselGUARD";
-
-        private static string? GetInstalledPath()
-        {
-            // Primary: config.json (user-scoped, no registry dependency)
-            try
-            {
-                var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                if (File.Exists(ConfigPath))
-                {
-                    var cfg = JsonSerializer.Deserialize<AppConfig>(
-                        File.ReadAllText(ConfigPath), opts);
-                    if (!string.IsNullOrEmpty(cfg?.InstalledPath))
-                        return cfg.InstalledPath;
-                }
-            }
-            catch { }
-
-            // Fallback: registry (written by previous installs)
-            try
-            {
-                using var key = Registry.LocalMachine.OpenSubKey(InstallRegKey);
-                return key?.GetValue("InstallPath") as string;
-            }
-            catch { return null; }
-        }
-
-        private static bool IsInstalled() =>
-            GetInstalledPath() is string p && File.Exists(Path.Combine(p, "MasselGUARD.exe"));
-
-        private void UpdateInstallButton()
-        {
-            // Notify settings window to refresh its install state if open
-            if (_settingsWindow != null && _settingsWindow.IsVisible)
-                _settingsWindow.RefreshInstallState();
-            UpdateFooterLabel();
+            // Dynamic tooltip: show status text (includes uptime) when active
+            TunnelLabel.ToolTip = active != null
+                ? $"{active.Name}\n{active.StatusText}\nType: {active.TypeLabel}"
+                : "No active tunnel";
         }
 
         private void UpdateFooterLabel()
         {
-            var installedPath = GetInstalledPath();
-            var currentDir    = Path.GetDirectoryName(
-                Environment.ProcessPath ?? AppContext.BaseDirectory) ?? "";
-            bool installed = installedPath != null &&
-                             File.Exists(Path.Combine(installedPath, "MasselGUARD.exe"));
-            bool runningFromInstall = installed &&
-                string.Equals(currentDir, installedPath, StringComparison.OrdinalIgnoreCase);
-
-            if (_cfg.ManualMode)
+            string modeText = AppRunMode switch
             {
-                FooterLabel.Text       = Lang.T("StatusManualMode");
-                FooterLabel.Foreground = (SolidColorBrush)FindResource("TextMuted");
-            }
-            else if (installed && runningFromInstall)
-            {
-                FooterLabel.Text       = Lang.T("StatusManaged");
-                FooterLabel.Foreground = (SolidColorBrush)FindResource("Success");
-            }
-            else if (installed && !runningFromInstall)
-            {
-                FooterLabel.Text       = Lang.T("StatusManagedPortable");
-                FooterLabel.Foreground = (SolidColorBrush)FindResource("TextMuted");
-            }
-            else
-            {
-                FooterLabel.Text       = Lang.T("StatusPortable");
-                FooterLabel.Foreground = (SolidColorBrush)FindResource("TextMuted");
-            }
+                AppRunModeKind.Managed         => Lang.T("InstallStatusManaged"),
+                AppRunModeKind.ManagedPortable => "Managed (Portable)",
+                _                              => Lang.T("InstallStatusNotInstalled"),
+            };
+            FooterLabel.Text = $"{Lang.T("FooterMode")}: {modeText}";
+            // Green for managed (like Admin label), muted for others
+            FooterLabel.Foreground = AppRunMode == AppRunModeKind.Managed
+                ? (Brush)FindResource("Success")
+                : (Brush)FindResource("TextMuted");
         }
 
-        /// <summary>Shows/hides the rules and default-action panels based on ManualMode.</summary>
-        internal void ApplyManualMode()
+        private void UpdateAdminLabel()
         {
-            UpdateFooterLabel();
+            bool isAdmin = new System.Security.Principal.WindowsPrincipal(
+                System.Security.Principal.WindowsIdentity.GetCurrent())
+                .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+
+            AdminLabel.Text       = isAdmin ? Lang.T("AdminYes") : Lang.T("AdminNo");
+            AdminLabel.Foreground = isAdmin
+                ? (Brush)FindResource("Success")
+                : (Brush)FindResource("Danger");
         }
 
-        internal void ApplyLocalTunnelMode()
-        {
-            bool localAllowed    = _cfg.Mode != AppMode.Companion;
-            bool companionAllowed = _cfg.Mode != AppMode.Standalone;
-
-            // Show/hide Add + Edit buttons based on whether local tunnels are allowed
-            AddTunnelBtn.Visibility  = localAllowed ? Visibility.Visible : Visibility.Collapsed;
-            EditTunnelBtn.Visibility = localAllowed ? Visibility.Visible : Visibility.Collapsed;
-
-            // WireGuard GUI button: Companion + Mixed only
-            if (OpenWgBtn != null)
-                OpenWgBtn.Visibility = companionAllowed ? Visibility.Visible : Visibility.Collapsed;
-
-            // WireGuard Log button: Companion + Mixed AND only when a WireGuard tunnel is active
-            RefreshWireGuardLogBtn();
-
-            // Quick Connect: Standalone + Mixed only
-            if (QuickConnectBtn != null)
-                QuickConnectBtn.Visibility = localAllowed ? Visibility.Visible : Visibility.Collapsed;
-
-            // Refresh list to show/hide tunnels by source
-            RefreshTunnelDropdowns();
-        }
-
-        // WireGuard Log button: visible only in Companion/Mixed mode AND when at
-        // least one WireGuard-type tunnel (source != "local") is currently active.
-        private void RefreshWireGuardLogBtn()
-        {
-            if (WireGuardLogBtn == null) return;
-            bool companionAllowed = _cfg.Mode != AppMode.Standalone;
-            bool wgTunnelActive   = false;
-            if (companionAllowed)
-            {
-                try
-                {
-                    wgTunnelActive = ServiceController.GetServices()
-                        .Any(s => s.ServiceName.StartsWith("WireGuardTunnel$",
-                                      StringComparison.OrdinalIgnoreCase)
-                                  && s.Status == ServiceControllerStatus.Running
-                                  && _cfg.Tunnels.Any(t =>
-                                      !string.Equals(t.Source, "local",
-                                          StringComparison.OrdinalIgnoreCase)
-                                      && string.Equals(t.Name,
-                                          s.ServiceName.Substring("WireGuardTunnel$".Length),
-                                          StringComparison.OrdinalIgnoreCase)));
-                }
-                catch { }
-            }
-            WireGuardLogBtn.Visibility = (companionAllowed && wgTunnelActive)
-                ? Visibility.Visible : Visibility.Collapsed;
-        }
-
-        // ── Quick Connect ─────────────────────────────────────────────────────
-        // Opens a .conf directly from disk and connects immediately without
-        // importing or storing it. Acts as a toggle: click again to disconnect.
-        //
-        // The plaintext conf is written to tunnels\temp\ (readable by LocalSystem)
-        // and deleted as soon as the tunnel disconnects or the app exits.
-        private string? _quickConnectConfPath   = null;
-        private string? _quickConnectTunnelName = null;
-        private string? _quickConnectDisplayName = null;
-
-        public async void QuickConnect_Click(object sender, RoutedEventArgs e)
-        {
-            // ── Disconnect if a quick-connect session is already active ───────
-            if (_quickConnectTunnelName != null && TunnelDll.IsRunning(_quickConnectTunnelName))
-            {
-                var qName = _quickConnectTunnelName;
-                var qConf = _quickConnectConfPath;
-                _quickConnectTunnelName  = null;
-                _quickConnectConfPath    = null;
-                _quickConnectDisplayName = null;
-                RefreshQuickConnectButton();
-
-                await System.Threading.Tasks.Task.Run(() =>
-                {
-                    TunnelDll.Disconnect(qName, out _);
-                    try { if (qConf != null && File.Exists(qConf)) File.Delete(qConf); } catch { }
-                });
-                LogRaw("Quick Connect: disconnected.", LogLevel.Ok);
-                UpdateStatusDisplay();
-                return;
-            }
-
-            // ── Pick a .conf file ─────────────────────────────────────────────
-            var dlg = new Microsoft.Win32.OpenFileDialog
-            {
-                Title  = "Quick Connect — open WireGuard config",
-                Filter = "WireGuard Config (*.conf;*.conf.dpapi)|*.conf;*.conf.dpapi|All files (*.*)|*.*"
-            };
-            if (dlg.ShowDialog(this) != true) return;
-
-            string srcPath = dlg.FileName;
-            // Strip double extension for .conf.dpapi: "home.conf.dpapi" → "home"
-            string name = srcPath.EndsWith(".conf.dpapi", StringComparison.OrdinalIgnoreCase)
-                ? Path.GetFileNameWithoutExtension(Path.GetFileNameWithoutExtension(srcPath))
-                : Path.GetFileNameWithoutExtension(srcPath);
-
-            // Validate DLLs before reading the config
-            var dllErr = TunnelDll.ValidateDlls();
-            if (dllErr != null)
-            { ShowErrorBanner($"Quick Connect: {dllErr}"); return; }
-
-            // Write a BOM-free temp copy to Program Files\MasselGUARD\temp\
-            // so LocalSystem can reliably read it regardless of the source location.
-            string tunnelKey = "qc_" + name;
-            EnsureTunnelsDirExists();
-            string qcSvcConf = SvcConfPath(tunnelKey);
-            try
-            {
-                string raw;
-                if (srcPath.EndsWith(".conf.dpapi", StringComparison.OrdinalIgnoreCase))
-                    raw = DpapiDecrypt(File.ReadAllBytes(srcPath));
-                else
-                    raw = File.ReadAllText(srcPath, System.Text.Encoding.UTF8);
-                // Atomic creation: file locked to SYSTEM + Admins + current user
-                // from first byte — no inherited-ACL window.
-                WriteSecure(qcSvcConf, raw);
-            }
-            catch (Exception ex)
-            { ShowErrorBanner($"Quick Connect: could not prepare config: {ex.Message}"); return; }
-
-            _quickConnectConfPath    = qcSvcConf;
-            _quickConnectTunnelName  = tunnelKey;
-            _quickConnectDisplayName = name;
-            RefreshQuickConnectButton();
-
-            LogRaw($"Quick Connect: connecting {name}…", LogLevel.Info);
-
-            bool ok = false;
-            string err = "";
-            await System.Threading.Tasks.Task.Run(() =>
-            {
-                ok = TunnelDll.Connect(tunnelKey, qcSvcConf,
-                    msg => LogRaw(msg, LogLevel.Debug), out err);
-            });
-
-            // Delete temp file immediately — service has parsed the config already.
-            try { File.Delete(qcSvcConf); } catch { }
-
-            if (ok)
-            {
-                LogRaw($"Quick Connect: {name} connected ✓", LogLevel.Ok);
-            }
-            else
-            {
-                LogRaw($"Quick Connect failed: {err}", LogLevel.Warn);
-                _quickConnectConfPath    = null;
-                _quickConnectTunnelName  = null;
-                _quickConnectDisplayName = null;
-                RefreshQuickConnectButton();
-            }
-            UpdateStatusDisplay();
-        }
-
-        // Update the Quick Connect button label based on active state
-        private void RefreshQuickConnectButton()
-        {
-            if (QuickConnectBtn == null) return;
-            bool active = _quickConnectTunnelName != null && TunnelDll.IsRunning(_quickConnectTunnelName);
-            if (active && _quickConnectDisplayName != null)
-            {
-                QuickConnectBtn.Content = $"⚡  {_quickConnectDisplayName}  ✕";
-                QuickConnectBtn.ToolTip = Lang.T("QuickConnectDisconnect");
-            }
-            else
-            {
-                QuickConnectBtn.SetBinding(System.Windows.Controls.ContentControl.ContentProperty,
-                    new System.Windows.Data.Binding("[BtnQuickConnect]")
-                    {
-                        Source = Lang.Instance
-                    });
-                QuickConnectBtn.ToolTip = Lang.T("TooltipQuickConnect");
-            }
-        }
-
-        private void CleanupQuickConnect()
-        {
-            if (_quickConnectTunnelName == null) return;
-            var qName = _quickConnectTunnelName;
-            _quickConnectTunnelName  = null;
-            _quickConnectDisplayName = null;
-            var qcPath = _quickConnectConfPath;
-            _quickConnectConfPath    = null;
-            TunnelDll.Disconnect(qName, out _);
-            try { if (qcPath != null && File.Exists(qcPath)) File.Delete(qcPath); } catch { }
-        }
-
-        /// <summary>Copies all subdirectories from source to dest, overwriting existing files.</summary>
-        private static void CopyDirectoryRecursive(string source, string dest)
-        {
-            foreach (var dir in Directory.GetDirectories(source))
-            {
-                var dirName = Path.GetFileName(dir);
-                var destDir = Path.Combine(dest, dirName);
-                Directory.CreateDirectory(destDir);
-                foreach (var file in Directory.GetFiles(dir))
-                    File.Copy(file, Path.Combine(destDir, Path.GetFileName(file)), overwrite: true);
-                CopyDirectoryRecursive(dir, destDir);
-            }
-        }
-
-        private void RunInstall()
-        {
-            // Check if already running from an installed location
-            var currentExe = Environment.ProcessPath
-                ?? AppContext.BaseDirectory;
-            var installedPath = GetInstalledPath();
-            if (installedPath != null &&
-                string.Equals(Path.GetDirectoryName(currentExe), installedPath,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                ShowDialog(Lang.T("InstallRunningFromInstall"), Lang.T("InstallTitle"),
-                    MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
-            }
-
-            // Show styled location picker — defaults to Program Files\MasselGUARD
-            var defaultParent = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            var chosenParent  = ShowInstallLocationDialog(defaultParent);
-            if (chosenParent == null) return;
-
-            var installDir = Path.Combine(chosenParent, InstallFolderName);
-
-            try
-            {
-                Log("InstallProgress", LogLevel.Info);
-
-                // 1. Create install folder and copy all files
-                Directory.CreateDirectory(installDir);
-                var sourceDir = Path.GetDirectoryName(currentExe)!;
-
-                // Copy all files in exe dir
-                foreach (var file in Directory.GetFiles(sourceDir))
-                    File.Copy(file, Path.Combine(installDir, Path.GetFileName(file)), overwrite: true);
-
-                // Copy all subdirectories recursively (lang, theme, etc.)
-                CopyDirectoryRecursive(sourceDir, installDir);
-
-                var installedExe = Path.Combine(installDir, "MasselGUARD.exe");
-
-                // Save icon as .ico file in install dir for the Start Menu shortcut
-                var icoPath = Path.Combine(installDir, "MasselGUARD.ico");
-                using (var icon = TrayIconHelper.CreateIcon(0))
-                using (var fs = File.Create(icoPath))
-                    icon.Save(fs);
-
-                // 2. Start Menu shortcut via PowerShell
-                var startMenuDir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms),
-                    InstallFolderName);
-                Directory.CreateDirectory(startMenuDir);
-                var shortcutPath = Path.Combine(startMenuDir, "MasselGUARD.lnk");
-                RunPowerShell($@"
-$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{shortcutPath}')
-$s.TargetPath      = '{installedExe}'
-$s.WorkingDirectory = '{installDir}'
-$s.IconLocation    = '{icoPath},0'
-$s.Description     = 'MasselGUARD'
-$s.Save()");
-
-                // 3. Write registry entry + config.json
-                using var key = Registry.LocalMachine.CreateSubKey(InstallRegKey)!;
-                key.SetValue("InstallPath", installDir);
-                key.SetValue("Version", "1.1");
-                _cfg.InstalledPath = installDir;
-                SaveConfig();
-
-                Log("InstallDone", LogLevel.Ok);
-
-                // 4. Ask about scheduled task (auto-start)
-                var autostart = ShowDialog(
-                    Lang.T("InstallAutostart"),
-                    Lang.T("InstallAutostartTitle"),
-                    MessageBoxButton.YesNo, MessageBoxImage.Question);
-
-                if (autostart == MessageBoxResult.Yes)
-                {
-                    var taskResult = RunPowerShell($@"
-$exe     = '{installedExe}'
-$action  = New-ScheduledTaskAction -Execute $exe
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-$prin    = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
-Register-ScheduledTask -TaskName 'MasselGUARD' `
-    -Action $action -Trigger $trigger -Principal $prin -Force");
-
-                    if (taskResult)
-                        Log("InstallScheduledOk", LogLevel.Ok);
-                    else
-                        Log("InstallScheduledFail", LogLevel.Warn, "PowerShell error");
-                }
-
-                // 5. Optionally delete the source folder (unless it IS the install dir)
-                var sourceDir2 = Path.GetDirectoryName(
-                    Environment.ProcessPath
-                    ?? AppContext.BaseDirectory)!;
-                var isDifferentDir = !string.Equals(sourceDir2, installDir,
-                    StringComparison.OrdinalIgnoreCase);
-
-                if (isDifferentDir)
-                {
-                    var deleteSource = ShowDialog(
-                        Lang.T("InstallDeleteSource", sourceDir2),
-                        Lang.T("InstallDeleteSourceTitle"),
-                        MessageBoxButton.YesNo, MessageBoxImage.Question);
-
-                    if (deleteSource == MessageBoxResult.Yes)
-                    {
-                        // Use cmd to delete after this process exits (can't delete running exe)
-                        Process.Start(new ProcessStartInfo("cmd.exe",
-                            $"/c timeout /t 2 /nobreak >nul & rd /s /q \"{sourceDir2}\"")
-                        {
-                            CreateNoWindow  = true,
-                            UseShellExecute = false
-                        });
-                    }
-                }
-
-                // 6. Relaunch from installed location and close this instance
-                Log("InstallRestarting", LogLevel.Ok);
-                Process.Start(new ProcessStartInfo(installedExe) { UseShellExecute = true });
-                System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
-                {
-                    ((App)System.Windows.Application.Current)
-                        .ShutdownApp();
-                });
-
-                UpdateInstallButton();
-            }
-            catch (Exception ex)
-            {
-                Log("InstallFailed", LogLevel.Warn, ex.Message);
-                ShowDialog(Lang.T("InstallFailed", ex.Message), Lang.T("InstallTitle"),
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        private void RunUninstall()
-        {
-            var installDir = GetInstalledPath();
-            if (installDir == null || !Directory.Exists(installDir))
-            {
-                ShowDialog(Lang.T("NotInstalled"), Lang.T("UninstallTitle"),
-                    MessageBoxButton.OK, MessageBoxImage.Information);
-                UpdateInstallButton();
-                return;
-            }
-
-            if (ShowDialog(Lang.T("UninstallConfirm"), Lang.T("UninstallTitle"),
-                    MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
-                return;
-
-            // Ask about config files
-            var keepConfig = ShowDialog(
-                Lang.T("UninstallKeepConfig"),
-                Lang.T("UninstallKeepConfigTitle"),
-                MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
-
-            try
-            {
-                Log("UninstallProgress", LogLevel.Info);
-
-                // Stop all running tunnel services first so tunnel.dll is released
-                StopAllTunnelServices();
-
-                // 1. Remove scheduled task
-                var taskRemoved = RunPowerShell(
-                    "Unregister-ScheduledTask -TaskName 'MasselGUARD' -Confirm:$false -ErrorAction SilentlyContinue");
-                if (taskRemoved) Log("UninstallRemovedTask", LogLevel.Ok);
-
-                // 2. Remove Start Menu shortcut
-                var startMenuDir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms),
-                    InstallFolderName);
-                if (Directory.Exists(startMenuDir))
-                    Directory.Delete(startMenuDir, recursive: true);
-
-                // 3. Remove registry entry + clear config.json InstalledPath
-                Registry.LocalMachine.DeleteSubKey(InstallRegKey, throwOnMissingSubKey: false);
-                _cfg.InstalledPath = null;
-                SaveConfig();
-
-                // 4. Delete config if user chose to
-                if (!keepConfig)
-                {
-                    // Delete user config from AppData
-                    var configDir = Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                        "MasselGUARD");
-                    // Also delete svc temp dir from ProgramData
-                    var tunnelDir = Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                        "MasselGUARD");
-                    if (Directory.Exists(configDir))
-                        Directory.Delete(configDir, recursive: true);
-                    if (Directory.Exists(tunnelDir))
-                        try { Directory.Delete(tunnelDir, recursive: true); } catch { }
-                }
-
-                // 5. Schedule deletion of install folder via cmd (can't delete running exe)
-                var currentExe = Environment.ProcessPath
-                    ?? AppContext.BaseDirectory;
-                var currentDir = Path.GetDirectoryName(currentExe) ?? "";
-                var isRunningFromInstall = string.Equals(
-                    currentDir, installDir,
-                    StringComparison.OrdinalIgnoreCase);
-
-                if (isRunningFromInstall)
-                {
-                    // Running from install folder — schedule deletion after this process exits
-                    // Use a loop in cmd to wait for the exe to be released before deleting
-                    Process.Start(new ProcessStartInfo("cmd.exe",
-                        $"/c timeout /t 3 /nobreak >nul & " +
-                        $"del /f /q \"{Path.Combine(installDir, "MasselGUARD.exe")}\" >nul 2>&1 & " +
-                        $"rd /s /q \"{installDir}\"")
-                    {
-                        CreateNoWindow  = true,
-                        UseShellExecute = false
-                    });
-                }
-                else
-                {
-                    // Delete the install folder immediately
-                    Directory.Delete(installDir, recursive: true);
-
-                    // Only ask about removing the current running location when it differs
-                    var removeCurrent = ShowDialog(
-                        Lang.T("UninstallRemoveCurrent", currentDir),
-                        Lang.T("UninstallRemoveCurrentTitle"),
-                        MessageBoxButton.YesNo, MessageBoxImage.Question);
-
-                    if (removeCurrent == MessageBoxResult.Yes)
-                    {
-                        Process.Start(new ProcessStartInfo("cmd.exe",
-                            $"/c timeout /t 2 /nobreak >nul & rd /s /q \"{currentDir}\"")
-                        {
-                            CreateNoWindow  = true,
-                            UseShellExecute = false
-                        });
-                    }
-                }
-
-                Log("UninstallClosing", LogLevel.Ok);
-                UpdateInstallButton();
-
-                // Close the application after a brief delay so the log message is visible
-                System.Windows.Application.Current.Dispatcher.BeginInvoke(async () =>
-                {
-                    await System.Threading.Tasks.Task.Delay(1500);
-                    ((App)System.Windows.Application.Current).ShutdownApp();
-                });
-            }
-            catch (Exception ex)
-            {
-                Log("UninstallFailed", LogLevel.Warn, ex.Message);
-                ShowDialog(Lang.T("UninstallFailed", ex.Message), Lang.T("UninstallTitle"),
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        // Styled install location picker — shows default path, Browse button, install-into preview
-        private string? ShowInstallLocationDialog(string defaultParent)
-        {
-            var Br = (string key) => (SolidColorBrush)FindResource(key);
-
-            string selectedParent = defaultParent;
-            string? result        = null;
-
-            var win = new Window
-            {
-                Title                 = Lang.T("InstallLocationTitle"),
-                Width                 = 520,
-                SizeToContent         = SizeToContent.Height,
-                WindowStyle           = WindowStyle.None,
-                AllowsTransparency    = true,
-                Background            = System.Windows.Media.Brushes.Transparent,
-                ResizeMode            = ResizeMode.NoResize,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner                 = this
-            };
-
-            var root = new System.Windows.Controls.Border
-            {
-                Background      = Br("WindowBg"),
-                BorderBrush     = Br("BorderColor"),
-                BorderThickness = new Thickness(1),
-                CornerRadius    = new CornerRadius(6)
-            };
-
-            var outer = new System.Windows.Controls.Grid();
-            outer.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = new GridLength(44) });
-            outer.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = GridLength.Auto });
-            outer.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = new GridLength(52) });
-
-            // ── Title bar ────────────────────────────────────────────────────
-            var titleBar = new System.Windows.Controls.Border
-            {
-                Background   = Br("Surface"),
-                CornerRadius = new CornerRadius(6, 6, 0, 0)
-            };
-            var titleText = new System.Windows.Controls.TextBlock
-            {
-                Text              = Lang.T("InstallLocationTitle"),
-                FontFamily        = new System.Windows.Media.FontFamily("Consolas"),
-                FontSize          = 12, FontWeight = FontWeights.Bold,
-                Foreground        = Br("Accent"),
-                Margin            = new Thickness(16, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            titleBar.Child = titleText;
-            titleBar.MouseLeftButtonDown += (_, e) =>
-            {
-                if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed) win.DragMove();
-            };
-            System.Windows.Controls.Grid.SetRow(titleBar, 0);
-            outer.Children.Add(titleBar);
-
-            // ── Content ───────────────────────────────────────────────────────
-            var content = new System.Windows.Controls.StackPanel
-            {
-                Margin = new Thickness(20, 16, 20, 16)
-            };
-
-            // Note about subfolder
-            content.Children.Add(new System.Windows.Controls.TextBlock
-            {
-                Text         = Lang.T("InstallLocationNote"),
-                FontFamily   = new System.Windows.Media.FontFamily("Consolas"),
-                FontSize     = 11,
-                Foreground   = Br("TextMuted"),
-                TextWrapping = System.Windows.TextWrapping.Wrap,
-                Margin       = new Thickness(0, 0, 0, 16)
-            });
-
-            // "Install into:" label + path preview (updates when Browse is clicked)
-            content.Children.Add(new System.Windows.Controls.TextBlock
-            {
-                Text       = Lang.T("InstallLocationCurrent"),
-                FontFamily = new System.Windows.Media.FontFamily("Consolas"),
-                FontSize   = 10,
-                Foreground = Br("TextMuted"),
-                Margin     = new Thickness(0, 0, 0, 4)
-            });
-
-            var pathPreview = new System.Windows.Controls.Border
-            {
-                Background      = Br("CardBg"),
-                BorderBrush     = Br("BorderColor"),
-                BorderThickness = new Thickness(1),
-                CornerRadius    = new CornerRadius(4),
-                Padding         = new Thickness(10, 7, 10, 7),
-                Margin          = new Thickness(0, 0, 0, 16)
-            };
-            var pathText = new System.Windows.Controls.TextBlock
-            {
-                Text         = Path.Combine(selectedParent, InstallFolderName),
-                FontFamily   = new System.Windows.Media.FontFamily("Consolas"),
-                FontSize     = 11,
-                Foreground   = Br("TextPrimary"),
-                TextWrapping = System.Windows.TextWrapping.Wrap
-            };
-            pathPreview.Child = pathText;
-            content.Children.Add(pathPreview);
-
-            // Browse button
-            var browseBtn = new System.Windows.Controls.Button
-            {
-                Content             = Lang.T("BtnBrowse"),
-                Style               = (Style)FindResource("FlatBtn"),
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Padding             = new Thickness(16, 6, 16, 6)
-            };
-            browseBtn.Click += (_, _) =>
-            {
-                using var folderDlg = new System.Windows.Forms.FolderBrowserDialog
-                {
-                    Description            = Lang.T("InstallSelectFolder"),
-                    UseDescriptionForTitle = true,
-                    SelectedPath           = selectedParent
-                };
-                if (folderDlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-                {
-                    selectedParent   = folderDlg.SelectedPath;
-                    pathText.Text    = Path.Combine(selectedParent, InstallFolderName);
-                }
-            };
-            content.Children.Add(browseBtn);
-
-            System.Windows.Controls.Grid.SetRow(content, 1);
-            outer.Children.Add(content);
-
-            // ── Button bar ────────────────────────────────────────────────────
-            var btnBar = new System.Windows.Controls.Border
-            {
-                Background   = Br("Surface"),
-                CornerRadius = new CornerRadius(0, 0, 6, 6)
-            };
-            var btnStack = new System.Windows.Controls.StackPanel
-            {
-                Orientation         = System.Windows.Controls.Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment   = VerticalAlignment.Center,
-                Margin              = new Thickness(0, 0, 16, 0)
-            };
-
-            var cancelBtn = new System.Windows.Controls.Button
-            {
-                Content = Lang.T("BtnCancel"),
-                Style   = (Style)FindResource("FlatBtn"),
-                Padding = new Thickness(20, 6, 20, 6),
-                Margin  = new Thickness(0, 0, 8, 0)
-            };
-            cancelBtn.Click += (_, _) => { result = null; win.Close(); };
-
-            var installBtn = new System.Windows.Controls.Button
-            {
-                Content = Lang.T("BtnInstallHere"),
-                Style   = (Style)FindResource("PrimaryBtn"),
-                Padding = new Thickness(20, 6, 20, 6)
-            };
-            installBtn.Click += (_, _) => { result = selectedParent; win.Close(); };
-
-            btnStack.Children.Add(cancelBtn);
-            btnStack.Children.Add(installBtn);
-            btnBar.Child = btnStack;
-            System.Windows.Controls.Grid.SetRow(btnBar, 2);
-            outer.Children.Add(btnBar);
-
-            root.Child  = outer;
-            win.Content = root;
-            win.ShowDialog();
-            return result;
-        }
-
-        // Styled dark dialog matching app theme — replaces MessageBox.Show
-        // Styled YesNo dialog with an optional "Don't ask again" checkbox.
-        // Returns (YesNo result, whether the checkbox was ticked).
-        private (MessageBoxResult result, bool dontAskAgain) ShowUpdatePrompt(
-            string message, string title)
-        {
-            var Br = (string key) => (SolidColorBrush)FindResource(key);
-
-            var result       = MessageBoxResult.No;
-            var dontAsk      = false;
-            var win = new Window
-            {
-                Title                 = title,
-                Width                 = 480,
-                SizeToContent         = SizeToContent.Height,
-                WindowStyle           = WindowStyle.None,
-                AllowsTransparency    = true,
-                Background            = System.Windows.Media.Brushes.Transparent,
-                ResizeMode            = ResizeMode.NoResize,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner                 = this
-            };
-
-            var root = new System.Windows.Controls.Border
-            {
-                Background      = Br("WindowBg"),
-                BorderBrush     = Br("BorderColor"),
-                BorderThickness = new Thickness(1),
-                CornerRadius    = new CornerRadius(6)
-            };
-
-            var grid = new System.Windows.Controls.Grid();
-            grid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = new GridLength(44) });
-            grid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = new GridLength(52) });
-
-            // Title bar
-            var titleBar = new System.Windows.Controls.Border
-                { Background = Br("Surface"), CornerRadius = new CornerRadius(6, 6, 0, 0) };
-            var titleText = new System.Windows.Controls.TextBlock
-            {
-                Text              = title,
-                FontFamily        = new System.Windows.Media.FontFamily("Consolas"),
-                FontSize          = 12, FontWeight = FontWeights.Bold,
-                Foreground        = Br("Accent"),
-                Margin            = new Thickness(16, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            titleBar.Child = titleText;
-            titleBar.MouseLeftButtonDown += (_, e) =>
-                { if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed) win.DragMove(); };
-            System.Windows.Controls.Grid.SetRow(titleBar, 0);
-            grid.Children.Add(titleBar);
-
-            // Message + checkbox
-            var contentPanel = new System.Windows.Controls.StackPanel
-                { Margin = new Thickness(20, 16, 20, 12) };
-
-            var msgPanel = new System.Windows.Controls.StackPanel
-                { Orientation = System.Windows.Controls.Orientation.Horizontal };
-            var iconBlock = new System.Windows.Controls.TextBlock
-            {
-                Text              = "?",
-                FontFamily        = new System.Windows.Media.FontFamily("Consolas"),
-                FontSize          = 20, Foreground = Br("Accent"),
-                Margin            = new Thickness(0, 0, 14, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            var msgBlock = new System.Windows.Controls.TextBlock
-            {
-                Text         = message,
-                FontFamily   = new System.Windows.Media.FontFamily("Consolas"),
-                FontSize     = 11, Foreground = Br("TextPrimary"),
-                TextWrapping = System.Windows.TextWrapping.Wrap,
-                MaxWidth     = 380
-            };
-            msgPanel.Children.Add(iconBlock);
-            msgPanel.Children.Add(msgBlock);
-            contentPanel.Children.Add(msgPanel);
-
-            // "Don't ask again" checkbox
-            var chk = new System.Windows.Controls.CheckBox
-            {
-                Content     = Lang.T("DontAskAgainUpdate"),
-                FontFamily  = new System.Windows.Media.FontFamily("Consolas"),
-                FontSize    = 10,
-                Foreground  = Br("TextMuted"),
-                Margin      = new Thickness(0, 12, 0, 0),
-                IsChecked   = false
-            };
-            contentPanel.Children.Add(chk);
-
-            System.Windows.Controls.Grid.SetRow(contentPanel, 1);
-            grid.Children.Add(contentPanel);
-
-            // Button bar
-            var btnBar = new System.Windows.Controls.Border
-                { Background = Br("Surface"), CornerRadius = new CornerRadius(0, 0, 6, 6) };
-            var btnStack = new System.Windows.Controls.StackPanel
-            {
-                Orientation         = System.Windows.Controls.Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment   = VerticalAlignment.Center,
-                Margin              = new Thickness(0, 0, 16, 0)
-            };
-
-            void AddBtn(string label, MessageBoxResult res, bool isPrimary = false)
-            {
-                var btn = new System.Windows.Controls.Button
-                {
-                    Content = label,
-                    Style   = (Style)FindResource(isPrimary ? "PrimaryBtn" : "FlatBtn"),
-                    Padding = new Thickness(20, 6, 20, 6),
-                    Margin  = new Thickness(6, 0, 0, 0)
-                };
-                btn.Click += (_, _) => { result = res; dontAsk = chk.IsChecked == true; win.Close(); };
-                btnStack.Children.Add(btn);
-            }
-
-            AddBtn(Lang.T("BtnNo"),  MessageBoxResult.No);
-            AddBtn(Lang.T("BtnYes"), MessageBoxResult.Yes, isPrimary: true);
-
-            btnBar.Child = btnStack;
-            System.Windows.Controls.Grid.SetRow(btnBar, 2);
-            grid.Children.Add(btnBar);
-
-            root.Child  = grid;
-            win.Content = root;
-            win.ShowDialog();
-            return (result, dontAsk);
-        }
-
-                private MessageBoxResult ShowDialog(string message, string title,
-            MessageBoxButton buttons = MessageBoxButton.OK,
-            MessageBoxImage icon = MessageBoxImage.None)
-        {
-            var Br = (string key) => (SolidColorBrush)FindResource(key);
-
-            var iconText = icon switch
-            {
-                MessageBoxImage.Warning or MessageBoxImage.Error => "⚠",
-                MessageBoxImage.Question                          => "?",
-                MessageBoxImage.Information                       => "ℹ",
-                _                                                 => ""
-            };
-            var iconColor = icon switch
-            {
-                MessageBoxImage.Error                             => "Danger",
-                MessageBoxImage.Warning                           => "Danger",
-                MessageBoxImage.Question                          => "Accent",
-                _                                                 => "TextMuted"
-            };
-
-            var result = MessageBoxResult.None;
-            var win = new Window
-            {
-                Title              = title,
-                Width              = 460,
-                SizeToContent      = SizeToContent.Height,
-                WindowStyle        = WindowStyle.None,
-                AllowsTransparency = true,
-                Background         = System.Windows.Media.Brushes.Transparent,
-                ResizeMode         = ResizeMode.NoResize,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner              = this
-            };
-
-            var root = new System.Windows.Controls.Border
-            {
-                Background      = Br("WindowBg"),
-                BorderBrush     = Br("BorderColor"),
-                BorderThickness = new Thickness(1),
-                CornerRadius    = new CornerRadius(6)
-            };
-
-            var grid = new System.Windows.Controls.Grid();
-            grid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = new GridLength(44) });
-            grid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = new GridLength(52) });
-
-            // Title bar
-            var titleBar = new System.Windows.Controls.Border
-            {
-                Background   = Br("Surface"),
-                CornerRadius = new CornerRadius(6, 6, 0, 0)
-            };
-            var titleText = new System.Windows.Controls.TextBlock
-            {
-                Text              = title,
-                FontFamily        = new System.Windows.Media.FontFamily("Consolas"),
-                FontSize          = 12, FontWeight = FontWeights.Bold,
-                Foreground        = Br("Accent"),
-                Margin            = new Thickness(16, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            titleBar.Child = titleText;
-            titleBar.MouseLeftButtonDown += (_, e) => { if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed) win.DragMove(); };
-            System.Windows.Controls.Grid.SetRow(titleBar, 0);
-            grid.Children.Add(titleBar);
-
-            // Message area
-            var msgPanel = new System.Windows.Controls.StackPanel
-            {
-                Orientation = System.Windows.Controls.Orientation.Horizontal,
-                Margin      = new Thickness(20, 16, 20, 16)
-            };
-            if (!string.IsNullOrEmpty(iconText))
-            {
-                var iconBlock = new System.Windows.Controls.TextBlock
-                {
-                    Text              = iconText,
-                    FontFamily        = new System.Windows.Media.FontFamily("Consolas"),
-                    FontSize          = 20,
-                    Foreground        = Br(iconColor),
-                    Margin            = new Thickness(0, 0, 14, 0),
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                msgPanel.Children.Add(iconBlock);
-            }
-            var msgBlock = new System.Windows.Controls.TextBlock
-            {
-                Text              = message,
-                FontFamily        = new System.Windows.Media.FontFamily("Consolas"),
-                FontSize          = 11,
-                Foreground        = Br("TextPrimary"),
-                TextWrapping      = System.Windows.TextWrapping.Wrap,
-                VerticalAlignment = VerticalAlignment.Center,
-                MaxWidth          = 370
-            };
-            msgPanel.Children.Add(msgBlock);
-            System.Windows.Controls.Grid.SetRow(msgPanel, 1);
-            grid.Children.Add(msgPanel);
-
-            // Button bar
-            var btnBar = new System.Windows.Controls.Border
-            {
-                Background   = Br("Surface"),
-                CornerRadius = new CornerRadius(0, 0, 6, 6)
-            };
-            var btnStack = new System.Windows.Controls.StackPanel
-            {
-                Orientation         = System.Windows.Controls.Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment   = VerticalAlignment.Center,
-                Margin              = new Thickness(0, 0, 16, 0)
-            };
-
-            void AddBtn(string label, MessageBoxResult res, bool isPrimary = false)
-            {
-                var btn = new System.Windows.Controls.Button
-                {
-                    Content         = label,
-                    Style           = (Style)FindResource(isPrimary ? "PrimaryBtn" : "FlatBtn"),
-                    Padding         = new Thickness(20, 6, 20, 6),
-                    Margin          = new Thickness(6, 0, 0, 0)
-                };
-                btn.Click += (_, _) => { result = res; win.Close(); };
-                btnStack.Children.Add(btn);
-            }
-
-            switch (buttons)
-            {
-                case MessageBoxButton.YesNo:
-                    AddBtn(Lang.T("BtnNo"),  MessageBoxResult.No);
-                    AddBtn(Lang.T("BtnYes"), MessageBoxResult.Yes, isPrimary: true);
-                    break;
-                case MessageBoxButton.OKCancel:
-                    AddBtn(Lang.T("BtnCancel"), MessageBoxResult.Cancel);
-                    AddBtn(Lang.T("BtnOk"),     MessageBoxResult.OK, isPrimary: true);
-                    break;
-                default:
-                    AddBtn(Lang.T("BtnOk"), MessageBoxResult.OK, isPrimary: true);
-                    break;
-            }
-
-            btnBar.Child = btnStack;
-            System.Windows.Controls.Grid.SetRow(btnBar, 2);
-            grid.Children.Add(btnBar);
-
-            root.Child = grid;
-            win.Content = root;
-            win.ShowDialog();
-            return result;
-        }
-
-        private static bool RunPowerShell(string script)
-        {
-            try
-            {
-                var psi = new ProcessStartInfo("powershell.exe",
-                    $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"{script.Replace("\"", "\\\"")}\"")
-                {
-                    UseShellExecute        = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError  = true,
-                    CreateNoWindow         = true
-                };
-                using var proc = Process.Start(psi)!;
-                proc.WaitForExit(30000);
-                return proc.ExitCode == 0;
-            }
-            catch { return false; }
-        }
-
-        private void OpenWireGuardGui_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                var exe = WgExe;
-                if (!File.Exists(exe))
-                {
-                    Log("LogGuiNotFound", LogLevel.Warn, exe);
-                    return;
-                }
-                Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true });
-                Log("LogOpenedGui", LogLevel.Ok);
-            }
-            catch (Exception ex) { Log("LogGuiError", LogLevel.Warn, ex.Message); }
-        }
-
-        private void ShowWireGuardLog_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                var exe = WgExe;
-                if (!File.Exists(exe))
-                {
-                    Log("LogGuiNotFound", LogLevel.Warn, exe);
-                    return;
-                }
-
-                // Frameless dark window matching app style
-                var bgBrush   = (SolidColorBrush)FindResource("WindowBg");
-                var panelBrush = (SolidColorBrush)FindResource("Surface");
-                var borderBrush = (SolidColorBrush)FindResource("BorderColor");
-                var cardBrush  = (SolidColorBrush)FindResource("CardBg");
-                var textBrush  = (SolidColorBrush)FindResource("TextPrimary");
-                var accentBrush = (SolidColorBrush)FindResource("Accent");
-
-                var tb = new System.Windows.Controls.TextBox
-                {
-                    IsReadOnly          = true,
-                    FontFamily          = new System.Windows.Media.FontFamily("Consolas"),
-                    FontSize            = 11,
-                    Background          = cardBrush,
-                    Foreground          = textBrush,
-                    BorderThickness     = new Thickness(0),
-                    VerticalScrollBarVisibility   = System.Windows.Controls.ScrollBarVisibility.Auto,
-                    HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
-                    TextWrapping        = System.Windows.TextWrapping.NoWrap,
-                    Padding             = new Thickness(10),
-                    Text                = ""
-                };
-
-                // Title bar
-                var titleText = new TextBlock
-                {
-                    Text       = Lang.T("LogWindowTitle"),
-                    FontFamily = new System.Windows.Media.FontFamily("Consolas"),
-                    FontSize   = 13,
-                    FontWeight = FontWeights.Bold,
-                    Foreground = accentBrush,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin     = new Thickness(14, 0, 0, 0)
-                };
-
-                var tailLabel = new TextBlock
-                {
-                    Text       = Lang.T("LogWindowLive"),
-                    FontFamily = new System.Windows.Media.FontFamily("Consolas"),
-                    FontSize   = 10,
-                    Foreground = (SolidColorBrush)FindResource("Success"),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin     = new Thickness(0, 0, 12, 0)
-                };
-
-                var closeBtn = new System.Windows.Controls.Button
-                {
-                    Content         = "✕",
-                    Style           = (Style)FindResource("DangerBtn"),
-                    Padding         = new Thickness(10, 4, 10, 4),
-                    BorderThickness = new Thickness(0),
-                    Background      = Brushes.Transparent,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin          = new Thickness(0, 0, 4, 0)
-                };
-
-                var titleBar = new System.Windows.Controls.Grid
-                {
-                    Background = panelBrush,
-                    Height     = 44
-                };
-                titleBar.Children.Add(titleText);
-                var rightStack = new System.Windows.Controls.StackPanel
-                {
-                    Orientation       = System.Windows.Controls.Orientation.Horizontal,
-                    HorizontalAlignment = HorizontalAlignment.Right,
-                    VerticalAlignment   = VerticalAlignment.Center
-                };
-                rightStack.Children.Add(tailLabel);
-                rightStack.Children.Add(closeBtn);
-                titleBar.Children.Add(rightStack);
-
-                var outerBorder = new System.Windows.Controls.Border
-                {
-                    BorderBrush     = borderBrush,
-                    BorderThickness = new Thickness(1),
-                    CornerRadius    = new CornerRadius(6)
-                };
-
-                var root = new System.Windows.Controls.Grid();
-                root.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = GridLength.Auto });
-                root.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-                System.Windows.Controls.Grid.SetRow(titleBar, 0);
-                System.Windows.Controls.Grid.SetRow(tb, 1);
-                root.Children.Add(titleBar);
-                root.Children.Add(tb);
-                outerBorder.Child = root;
-
-                var win = new Window
-                {
-                    Title               = Lang.T("LogWindowTitle"),
-                    Width               = 920,
-                    Height              = 620,
-                    Background          = bgBrush,
-                    WindowStyle         = WindowStyle.None,
-                    AllowsTransparency  = true,
-                    ResizeMode          = ResizeMode.CanResizeWithGrip,
-                    Owner               = this,
-                    Content             = outerBorder
-                };
-
-                closeBtn.Click += (_, _) => win.Close();
-                titleBar.MouseLeftButtonDown += (_, mev) => { if (mev.LeftButton == System.Windows.Input.MouseButtonState.Pressed) win.DragMove(); };
-
-                // Helper: filter raw dumplog output to lines from the last 24 hours
-                string[] FilterRecent(string raw)
-                {
-                    var cutoff = DateTime.Now.AddDays(-1);
-                    return raw.Split('\n').Where(l =>
-                    {
-                        if (l.Length >= 19 &&
-                            DateTime.TryParseExact(l.Substring(0, 19), "yyyy/MM/dd HH:mm:ss",
-                                System.Globalization.CultureInfo.InvariantCulture,
-                                System.Globalization.DateTimeStyles.None, out var dt))
-                            return dt >= cutoff;
-                        return l.TrimEnd().Length > 0;
-                    }).ToArray();
-                }
-
-                // Step 1: load last 24h history with a plain /dumplog (exits immediately)
-                try
-                {
-                    var histPsi = new ProcessStartInfo(exe, "/dumplog")
-                    {
-                        UseShellExecute        = false,
-                        RedirectStandardOutput = true,
-                        CreateNoWindow         = true
-                    };
-                    using var histProc = Process.Start(histPsi)!;
-                    var histText = histProc.StandardOutput.ReadToEnd();
-                    histProc.WaitForExit(8000);
-                    var histLines = FilterRecent(histText);
-                    if (histLines.Length > 0)
-                    {
-                        tb.Text = string.Join("\n", histLines) + "\n";
-                        tb.ScrollToEnd();
-                    }
-                }
-                catch { /* if history fails, start fresh */ }
-
-                // Step 2: start /dumplog /tail — streams new lines to stdout as they arrive
-                var tailProc = new Process
-                {
-                    StartInfo = new ProcessStartInfo(exe, "/dumplog /tail")
-                    {
-                        UseShellExecute        = false,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError  = true,
-                        CreateNoWindow         = true
-                    },
-                    EnableRaisingEvents = true
-                };
-
-                tailProc.OutputDataReceived += (_, args) =>
-                {
-                    if (string.IsNullOrEmpty(args.Data)) return;
-                    var line = args.Data;
-                    Dispatcher.BeginInvoke(() => { tb.AppendText(line + "\n"); tb.ScrollToEnd(); });
-                };
-                tailProc.ErrorDataReceived += (_, args) =>
-                {
-                    if (string.IsNullOrEmpty(args.Data)) return;
-                    var line = args.Data;
-                    Dispatcher.BeginInvoke(() => { tb.AppendText(line + "\n"); tb.ScrollToEnd(); });
-                };
-                tailProc.Exited += (_, _) =>
-                {
-                    Dispatcher.BeginInvoke(() =>
-                    {
-                        tailLabel.Text       = Lang.T("LogWindowStopped");
-                        tailLabel.Foreground = (SolidColorBrush)FindResource("TextMuted");
-                    });
-                };
-
-                tailProc.Start();
-                tailProc.BeginOutputReadLine();
-                tailProc.BeginErrorReadLine();
-
-                win.Closed += (_, _) =>
-                {
-                    try { if (!tailProc.HasExited) tailProc.Kill(); } catch { }
-                    tailProc.Dispose();
-                };
-
-                win.Show();
-                Log("LogLogOpened", LogLevel.Ok);
-            }
-            catch (Exception ex) { Log("LogLogError", LogLevel.Warn, ex.Message); }
-        }
-
-        // ── Logging ────────────────────────────────────────────────────────────
-
-        private enum LogLevel { Debug, Info, Ok, Warn }
-        private static SolidColorBrush LInfo  => ThemeRes.Accent;
-        private static SolidColorBrush LOk    => ThemeRes.Success;
-        private static SolidColorBrush LWarn  => ThemeRes.Danger;
-        private static SolidColorBrush LTime  => ThemeRes.LogTimestamp;
-        private static SolidColorBrush LDebug => ThemeRes.TextMuted;
-
-        // A log entry is either a translatable key+args pair, or a raw (external) string.
-        private record LogEntry(DateTime Time, LogLevel Level, string? Key, object[]? Args, string? Raw);
-
-        private readonly List<LogEntry> _logEntries = new();
-        private const int MaxLogEntries = 300;
-
-        // Log a translatable message by key (app-generated messages)
-        private void Log(string key, LogLevel level, params object[] args)
-        {
-            if (!ShouldLog(level)) return;
-            // Marshal to UI thread when called from a background worker (e.g. async connect).
-            if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(() => Log(key, level, args)); return; }
-            var entry = new LogEntry(DateTime.Now, level, key, args, null);
-            _logEntries.Insert(0, entry);
-            if (_logEntries.Count > MaxLogEntries) _logEntries.RemoveAt(_logEntries.Count - 1);
-            RenderLogEntry(entry, prepend: true);
-        }
-
-        // Log a raw untranslatable string (e.g. OS error messages, WireGuard internals)
-        private void LogRaw(string message, LogLevel level)
-        {
-            if (!ShouldLog(level)) return;
-            // Marshal to UI thread when called from a background worker (e.g. async connect).
-            if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(() => LogRaw(message, level)); return; }
-            var entry = new LogEntry(DateTime.Now, level, null, null, message);
-            _logEntries.Insert(0, entry);
-            if (_logEntries.Count > MaxLogEntries) _logEntries.RemoveAt(_logEntries.Count - 1);
-            RenderLogEntry(entry, prepend: true);
-        }
-
-        // normal   — Ok + Warn only
-        // extended — everything including Debug
-        private bool ShouldLog(LogLevel level) => _cfg.LogLevelSetting switch
-        {
-            "extended" => true,
-            _          => level == LogLevel.Ok || level == LogLevel.Warn,   // "normal"
-        };
-
-        private void LogDebug(string key, params object[] args) =>
-            Log(key, LogLevel.Debug, args);
-
-        private void RenderLogEntry(LogEntry entry, bool prepend)
-        {
-            try
-            {
-                var text = entry.Key != null
-                    ? (entry.Args?.Length > 0 ? Lang.T(entry.Key, entry.Args) : Lang.T(entry.Key))
-                    : (entry.Raw ?? "");
-
-                var para = new Paragraph { Margin = new Thickness(0) };
-                para.Inlines.Add(new Run(entry.Time.ToString("HH:mm:ss") + " ") { Foreground = LTime });
-
-                // Lines that start with spaces are continuation/detail lines — render a dim
-                // indent marker instead of dumping raw leading whitespace into the RichTextBox.
-                var trimmed = text.TrimStart();
-                if (trimmed != text && trimmed.Length > 0)
-                    para.Inlines.Add(new Run("  ↳ ") { Foreground = LTime });
-
-                para.Inlines.Add(new Run(trimmed) { Foreground = entry.Level switch
-                    { LogLevel.Ok => LOk, LogLevel.Warn => LWarn, LogLevel.Debug => LDebug, _ => LInfo } });
-
-                if (prepend)
-                {
-                    if (LogDocument.Blocks.FirstBlock != null)
-                        LogDocument.Blocks.InsertBefore(LogDocument.Blocks.FirstBlock, para);
-                    else
-                        LogDocument.Blocks.Add(para);
-                }
-                else
-                {
-                    LogDocument.Blocks.Add(para);
-                }
-            }
-            catch { }
-        }
-
-        // Rebuild the entire log display in the current language
-        private void RebuildLog()
-        {
-            try
-            {
-                LogDocument.Blocks.Clear();
-                foreach (var entry in _logEntries)
-                    RenderLogEntry(entry, prepend: false);
-            }
-            catch { }
-        }
-
-        // ── Window chrome ──────────────────────────────────────────────────────
-
-        private void TitleBar_MouseDown(object sender, MouseButtonEventArgs e)
-        { if (e.LeftButton == MouseButtonState.Pressed) DragMove(); }
-
-        private Views.SettingsWindow? _settingsWindow;
-
-
-        private void ExportLog_Click(object sender, RoutedEventArgs e)
-        {
-            var dlg = new Microsoft.Win32.SaveFileDialog
-            {
-                Title      = Lang.T("ExportLogTitle"),
-                Filter     = "Text file (*.txt)|*.txt|All files (*.*)|*.*",
-                FileName   = $"MasselGUARD_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
-                DefaultExt = ".txt",
-            };
-            if (dlg.ShowDialog() != true) return;
-            try
-            {
-                var lines = new System.Text.StringBuilder();
-                var doc   = LogDocument;
-                foreach (var block in doc.Blocks)
-                {
-                    if (block is System.Windows.Documents.Paragraph p)
-                    {
-                        foreach (var inline in p.Inlines)
-                            if (inline is System.Windows.Documents.Run r)
-                                lines.Append(r.Text);
-                        lines.AppendLine();
-                    }
-                }
-                File.WriteAllText(dlg.FileName, lines.ToString(), System.Text.Encoding.UTF8);
-                Log("ExportLogSuccess", LogLevel.Ok, dlg.FileName);
-            }
-            catch (Exception ex)
-            {
-                System.Windows.MessageBox.Show(ex.Message, Lang.T("ExportLogTitle"),
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        private void SettingsBtn_Click(object sender, RoutedEventArgs e)
-        {
-            if (_settingsWindow != null && _settingsWindow.IsVisible)
-            {
-                _settingsWindow.Activate();
-                return;
-            }
-            _settingsWindow = new Views.SettingsWindow(this) { Owner = this };
-            _settingsWindow.Show();
-        }
-
-        // ── Theme toggle button (title bar) ───────────────────────────────────
-        // Cycles: Dark → Light → Auto, updates icon, applies immediately
+        // ── Theme toggle ──────────────────────────────────────────────────────
         private void ThemeToggle_Click(object sender, RoutedEventArgs e)
         {
-            // Cycle: Dark → Light → Auto → Dark
-            if (_cfg.AutoTheme)
+            var cfg  = ConfigSvc.Config;
+            string next;
+            if (cfg.AutoTheme)
             {
-                _cfg.AutoTheme   = false;
-                _cfg.ActiveTheme = _cfg.ActiveDarkTheme;
-                ThemeManager.Instance.Load(_cfg.ActiveTheme);
-                LogRaw($"Theme: dark ({_cfg.ActiveTheme})", LogLevel.Info);
+                cfg.AutoTheme = false;
+                next          = cfg.ActiveDarkTheme;
+            }
+            else if (cfg.ActiveTheme == cfg.ActiveDarkTheme)
+            {
+                next = cfg.ActiveLightTheme;
             }
             else
             {
-                bool onDark = _cfg.ActiveTheme == _cfg.ActiveDarkTheme ||
-                              ThemeManager.Instance.Current.Type
-                                  .Equals("dark", StringComparison.OrdinalIgnoreCase);
-                if (onDark)
-                {
-                    _cfg.ActiveTheme = _cfg.ActiveLightTheme;
-                    ThemeManager.Instance.Load(_cfg.ActiveTheme);
-                    LogRaw($"Theme: light ({_cfg.ActiveTheme})", LogLevel.Info);
-                }
-                else
-                {
-                    _cfg.AutoTheme   = true;
-                    bool isDark      = ThemeManager.GetSystemIsDark();
-                    _cfg.ActiveTheme = isDark ? _cfg.ActiveDarkTheme : _cfg.ActiveLightTheme;
-                    ThemeManager.Instance.Load(_cfg.ActiveTheme);
-                    LogRaw($"Theme: auto → {(isDark ? "dark" : "light")} ({_cfg.ActiveTheme})", LogLevel.Info);
-                }
+                cfg.AutoTheme = true;
+                next          = ThemeManager.GetSystemIsDark()
+                    ? cfg.ActiveDarkTheme : cfg.ActiveLightTheme;
             }
-
-            AppConfig.SaveThemeConfig(_cfg.ActiveTheme, _cfg.ActiveDarkTheme,
-                                      _cfg.ActiveLightTheme, _cfg.AutoTheme);
+            ThemeManager.Instance.Load(next);
+            cfg.ActiveTheme = next;
+            ConfigSvc.Save();
             UpdateThemeToggleIcon();
-
-            if (_settingsWindow is { IsVisible: true } sw)
-                sw.RefreshThemeSection();
         }
 
         internal void UpdateThemeToggleIcon()
         {
-            if (ThemeToggleBtn == null) return;
-            if (_cfg.AutoTheme)
-                ThemeToggleBtn.Content = "⚡";
-            else if (_cfg.ActiveTheme == _cfg.ActiveLightTheme ||
-                     ThemeManager.Instance.Current.Type
-                         .Equals("light", StringComparison.OrdinalIgnoreCase))
-                ThemeToggleBtn.Content = "☀";
-            else
-                ThemeToggleBtn.Content = "🌙";
-
-            // Apply custom appIcon to Window.Icon (taskbar) when set
-            if (Application.Current.Resources["Theme.AppIcon"] is System.Windows.Media.Imaging.BitmapImage bmp)
-                Icon = bmp;
-            else
-                Icon = null;
-
-            // Refresh tunnel name/status colours — they read ThemeRes which changed
-            foreach (var t in _tunnels) t.RefreshLabels();
+            var cfg = ConfigSvc.Config;
+            ThemeToggleBtn.Content = cfg.AutoTheme ? "⚡" :
+                cfg.ActiveTheme == cfg.ActiveDarkTheme ? "🌙" : "☀";
         }
 
-        // Public wrappers used by SettingsWindow
-        public void LogDebugPublic(string key, params object[] args) => LogDebug(key, args);
-        public void LogInfoPublic(string message) => LogRaw(message, LogLevel.Info);
-        public void RefreshTunnelDropdownsPublic()  => RefreshTunnelDropdowns();
-        public void OpenWireGuardGui()  => OpenWireGuardGui_Click(this, new RoutedEventArgs());
-        public void OpenWireGuardLog()  => ShowWireGuardLog_Click(this, new RoutedEventArgs());
-        public void ApplyLocalTunnelModePublic() => ApplyLocalTunnelMode();
-        public bool   IsInstalledCheck()        => IsInstalled();
-        public string? GetInstalledPathPublic()  => GetInstalledPath();
-        public AppConfig GetConfig()             => _cfg;
-        public static AppConfig? GetConfigStatic() => _cfg;
-        public void   SaveConfigPublic()         => SaveConfig();
-        public void   SaveConfigPublic(string desc) => SaveConfig(desc);
-        public System.Collections.ObjectModel.ObservableCollection<TunnelRule> GetRules()    => _rules;
-        public List<string> GetTunnelNames()     => _tunnels.Select(t => t.Name).ToList();
+        internal void ApplyManualMode()
+        {
+            UpdateFooterLabel();
+            RefreshWifiRulesPanel();
+            _vm.NotifyRulesColumnChanged();
+        }
 
+        // ── Window chrome ─────────────────────────────────────────────────────
+        private void TitleBar_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.LeftButton == MouseButtonState.Pressed) DragMove();
+        }
+
+        private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            e.Cancel = true;
+            Hide();
+        }
+
+        private void CloseBtn_Click(object sender, RoutedEventArgs e) => Hide();
+
+        private void DismissBanner_Click(object sender, RoutedEventArgs e)
+            => ErrorBanner.Visibility = Visibility.Collapsed;
+
+        // ── Public API used by Settings/Wizard ───────────────────────────────
+        public AppConfig    GetConfig()             => ConfigSvc.Config;
+        public static AppConfig? GetConfigStatic()  => null; // removed — use DI
+        public void         SaveConfigPublic()      { ConfigSvc.Save(); }
+        public void         SaveConfigPublic(string desc)
+        {
+            ConfigSvc.Save();
+            LogSvc.Ok($"Saved: {desc}");
+        }
+        public void         LogInfoPublic(string msg) => LogSvc.Info(msg);
+        public List<string> GetTunnelNames()
+        {
+            return ConfigSvc.Config.Tunnels
+                .Where(t => ConfigSvc.Config.Mode switch
+                {
+                    AppMode.Standalone => t.Source == "local",
+                    AppMode.Companion  => t.Source != "local",
+                    _                  => true,
+                })
+                .Select(t => t.Name)
+                .ToList();
+        }
+        public System.Collections.ObjectModel.ObservableCollection<TunnelRule> GetRules()
+        {
+            var col = new System.Collections.ObjectModel.ObservableCollection<TunnelRule>(
+                ConfigSvc.Config.Rules);
+            return col;
+        }
         public void AddRulePublic()
         {
-            var dlg = new Views.RuleDialog(GetCurrentSsid(), tunnels: GetAvailableTunnels()) { Owner = this };
+            var dlg = new Views.RuleDialog(GetCurrentSsid(), tunnels: GetAvailableTunnels())
+                { Owner = this };
             if (dlg.ShowDialog() != true) return;
             var rule = new TunnelRule { Ssid = dlg.ResultSsid, Tunnel = dlg.ResultTunnel };
-            _rules.Add(rule);
-            _cfg.Rules = _rules.ToList();
-            // saved by caller
+            ConfigSvc.Config.Rules.Add(rule);
         }
-
         public void EditRulePublic(TunnelRule rule)
         {
-            var dlg = new Views.RuleDialog(GetCurrentSsid(), rule.Ssid, rule.Tunnel, GetAvailableTunnels()) { Owner = this };
+            var dlg = new Views.RuleDialog(GetCurrentSsid(),
+                existingName:   rule.Name,
+                existingSsid:   rule.Ssid,
+                existingTunnel: rule.Tunnel,
+                tunnels:        GetAvailableTunnels()) { Owner = this };
             if (dlg.ShowDialog() != true) return;
+            rule.Name   = dlg.ResultName;
             rule.Ssid   = dlg.ResultSsid;
             rule.Tunnel = dlg.ResultTunnel;
-            _cfg.Rules = _rules.ToList();
         }
-
         public void DeleteRulePublic(TunnelRule rule)
         {
-            _rules.Remove(rule);
-            _cfg.Rules = _rules.ToList();
-        }
-        public void   SetMode(AppMode mode)
-        {
-            _cfg.Mode = mode;
-            SaveConfig();
-            ApplyLocalTunnelMode();
-            ApplyManualMode();
+            ConfigSvc.Config.Rules.Remove(rule);
         }
 
-        /// <summary>True when running from a different directory than the install path.</summary>
-        public bool IsRunningPortableWhileInstalled()
-        {
-            var installedPath = GetInstalledPath();
-            if (installedPath == null) return false;
-            var currentDir = Path.GetDirectoryName(
-                Environment.ProcessPath ?? AppContext.BaseDirectory) ?? "";
-            return !string.Equals(currentDir, installedPath, StringComparison.OrdinalIgnoreCase);
-        }
+        private string? GetCurrentSsid() => WifiSvc.CurrentSsid;
+        private List<string> GetAvailableTunnels() => GetTunnelNames();
 
-        public void RunInstallPublic()
-        {
-            if (!IsInstalled())        RunInstall();
-            else if (IsRunningPortableWhileInstalled()) RunUpdate();
-            else                       RunUninstall();
-        }
-
-        /// <summary>
-        /// Overwrites the installed version with the currently running portable copy.
-        /// Copies all files from the current exe directory into the install directory,
-        /// then relaunches from the installed location.
-        /// </summary>
-        private void RunUpdate()
-        {
-            var installDir = GetInstalledPath()!;
-            var currentExe = Environment.ProcessPath ?? AppContext.BaseDirectory;
-            var sourceDir  = Path.GetDirectoryName(currentExe)!;
-
-            try
-            {
-                Log("InstallProgress", LogLevel.Info);
-
-                // Stop all running WireGuardTunnel$ services — they hold tunnel.dll open
-                StopAllTunnelServices();
-
-                // Copy all files from current dir → install dir (overwrite)
-                foreach (var file in Directory.GetFiles(sourceDir))
-                {
-                    var dest = Path.Combine(installDir, Path.GetFileName(file));
-                    // Rename running exe instead of copying over it directly
-                    if (string.Equals(Path.GetFileName(file), "MasselGUARD.exe",
-                        StringComparison.OrdinalIgnoreCase) && File.Exists(dest))
-                    {
-                        var old = dest + ".old";
-                        if (File.Exists(old)) File.Delete(old);
-                        File.Move(dest, old);
-                    }
-                    File.Copy(file, dest, overwrite: true);
-                }
-
-                // Copy lang subfolder
-                var sourceLang = Path.Combine(sourceDir, "lang");
-                if (Directory.Exists(sourceLang))
-                {
-                    var destLang = Path.Combine(installDir, "lang");
-                    Directory.CreateDirectory(destLang);
-                    foreach (var file in Directory.GetFiles(sourceLang))
-                        File.Copy(file, Path.Combine(destLang, Path.GetFileName(file)), overwrite: true);
-                }
-
-                // Clean up renamed old exe
-                var oldExe = Path.Combine(installDir, "MasselGUARD.exe.old");
-                if (File.Exists(oldExe))
-                    try { File.Delete(oldExe); } catch { }
-
-                Log("UpdateDoneRestart", LogLevel.Ok);
-
-                // Relaunch from installed location
-                var installedExe = Path.Combine(installDir, "MasselGUARD.exe");
-                Process.Start(new ProcessStartInfo(installedExe) { UseShellExecute = true });
-                System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
-                    ((App)System.Windows.Application.Current).ShutdownApp());
-            }
-            catch (Exception ex)
-            {
-                Log("InstallFailed", LogLevel.Warn, ex.Message);
-                ShowDialog(Lang.T("InstallFailed", ex.Message), Lang.T("InstallTitle"),
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        // ── Orphaned service detection ─────────────────────────────────────
-
-        // An orphaned WireGuardTunnel$ service is one that exists in the SCM
-        // but is not tracked by MasselGUARD (e.g. left after a crash).
-        public record OrphanedService(
-            string ServiceName,    // full SCM name, e.g. "WireGuardTunnel$home"
-            string TunnelName,     // just the tunnel part, e.g. "home"
-            bool   TunnelActive);  // true = WireGuard adapter still present in OS
+        // ── Orphaned service detection ────────────────────────────────────────
+        public record OrphanedService(string ServiceName, string TunnelName, bool TunnelActive);
 
         public List<OrphanedService> GetOrphanedServices()
         {
-            var result = new List<OrphanedService>();
+            var result  = new List<OrphanedService>();
+            var tracked = new System.Collections.Generic.HashSet<string>(
+                ConfigSvc.Config.Tunnels.Select(t => t.Name),
+                StringComparer.OrdinalIgnoreCase);
+
             try
             {
-                // Build set of service name suffixes we own
-                var known = new HashSet<string>(
-                    _cfg.Tunnels.Select(t => SafeName(t.Name)),
-                    StringComparer.OrdinalIgnoreCase);
-
-                // Active WireGuard adapters: wireguard-NT names them after the tunnel
                 var wgAdapters = System.Net.NetworkInformation
                     .NetworkInterface.GetAllNetworkInterfaces()
                     .Where(n => n.Description.Contains("WireGuard",
@@ -4095,162 +1125,1380 @@ Register-ScheduledTask -TaskName 'MasselGUARD' `
                     .Select(n => n.Name)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-                foreach (var svc in ServiceController.GetServices())
+                foreach (var svc in System.ServiceProcess.ServiceController.GetServices())
                 {
                     const string prefix = "WireGuardTunnel$";
                     if (!svc.ServiceName.StartsWith(prefix,
                         StringComparison.OrdinalIgnoreCase)) continue;
 
-                    var tunnelName = svc.ServiceName.Substring(prefix.Length);
+                    var name = svc.ServiceName[prefix.Length..];
+                    if (tracked.Contains(name)) continue;
 
-                    // Skip services that MasselGUARD knows about
-                    if (known.Contains(tunnelName)) continue;
-
-                    bool active = wgAdapters.Contains(tunnelName);
-                    result.Add(new OrphanedService(svc.ServiceName, tunnelName, active));
+                    bool active = wgAdapters.Contains(name);
+                    result.Add(new OrphanedService(svc.ServiceName, name, active));
                 }
             }
             catch { }
+
             return result;
         }
 
-        public void RemoveOrphanedService(OrphanedService orphan)
+        public void RemoveOrphan(OrphanedService orphan)
         {
-            TunnelDll.ForceRemoveService(orphan.ServiceName);
-            LogRaw(Lang.T("OrphanRemoved", orphan.TunnelName), LogLevel.Ok);
-        }
-
-        private void StopAllTunnelServices()
-        {
-            CleanupQuickConnect();
             try
             {
-                foreach (var t in _cfg.Tunnels.Where(t => t.Source == "local"))
-                {
-                    if (TunnelDll.IsRunning(t.Name))
-                    {
-                        Log("LogStoppedTunnel", LogLevel.Info, t.Name, "");
-                        TunnelDll.Disconnect(t.Name, out _);
-                        // No temp file to delete — conf lives in tunnels\ directly.
-                    }
-                }
+                using var sc = new System.ServiceProcess.ServiceController(orphan.ServiceName);
+                if (sc.Status == System.ServiceProcess.ServiceControllerStatus.Running)
+                    sc.Stop();
+                TunnelDll.Disconnect(orphan.TunnelName, out _);
+                LogSvc.Ok($"Orphan removed: {orphan.TunnelName}");
             }
-            catch { }
-
-            // Sweep orphaned WireGuardTunnel$ services not in config
-            try
+            catch (Exception ex)
             {
-                foreach (var svc in ServiceController.GetServices())
-                {
-                    if (!svc.ServiceName.StartsWith("WireGuardTunnel$",
-                        StringComparison.OrdinalIgnoreCase)) continue;
-                    var name = svc.ServiceName.Substring("WireGuardTunnel$".Length);
-                    if (_cfg.Tunnels.Any(t => string.Equals(t.Name, name,
-                        StringComparison.OrdinalIgnoreCase))) continue;
-                    try
-                    {
-                        var stored = _cfg.Tunnels.FirstOrDefault(t =>
-                            string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
-                        if (stored?.Source == "local")
-                            TunnelDll.Disconnect(name, out _);
-                        else if (svc.Status != ServiceControllerStatus.Stopped)
-                            svc.Stop();
-                    }
-                    catch { }
-                }
+                LogSvc.Warn($"Remove orphan failed ({orphan.TunnelName}): {ex.Message}");
             }
-            catch { }
         }
 
-        protected override void OnActivated(EventArgs e)
-        {
-            base.OnActivated(e);
-            // Recheck availability every time the window is brought to the foreground
-            if (_tunnels.Count > 0)
-                CheckTunnelAvailability();
-        }
+        /// <summary>Normalises a version string for equality comparison — strips leading v, trims whitespace.</summary>
+        private static string NormaliseVersion(string v)
+            => v?.Trim().TrimStart('v', 'V').Trim() ?? "";
 
-        private void CloseBtn_Click(object sender, RoutedEventArgs e)    => Hide();
-        private void Window_Closing(object sender, CancelEventArgs e)
+        private static bool IsVersionNewer(string current, string previous)
         {
-            e.Cancel = true;
-            Hide();
-        }
-
-        protected override void OnClosed(EventArgs e)
-        {
-            CleanupQuickConnect();
-            if (_wlanHandle != IntPtr.Zero) { WlanCloseHandle(_wlanHandle, IntPtr.Zero); _wlanHandle = IntPtr.Zero; }
-            base.OnClosed(e);
-        }
-
-        private void UpdateAdminLabel()
-        {
-            bool admin = new System.Security.Principal.WindowsPrincipal(
-                System.Security.Principal.WindowsIdentity.GetCurrent())
-                .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
-            AdminLabel.Text       = admin ? Lang.T("LogAdminYes") : Lang.T("LogAdminNo");
-            AdminLabel.Foreground = admin ? (SolidColorBrush)FindResource("Success") : (SolidColorBrush)FindResource("Danger");
-        }
-    }
-
-    // Simple data class for the language picker ComboBox
-    public class LangItem
-    {
-        private static readonly Dictionary<string, string> Flags = new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["en"] = "🇬🇧",
-            ["nl"] = "🇳🇱",
-            ["de"] = "🇩🇪",
-            ["fr"] = "🇫🇷",
-            ["es"] = "🇪🇸",
-            ["pt"] = "🇵🇹",
-            ["it"] = "🇮🇹",
-            ["pl"] = "🇵🇱",
-            ["ru"] = "🇷🇺",
-            ["ja"] = "🇯🇵",
-            ["zh"] = "🇨🇳",
-            ["ko"] = "🇰🇷",
-            ["ar"] = "🇸🇦",
-            ["tr"] = "🇹🇷",
-            ["sv"] = "🇸🇪",
-            ["no"] = "🇳🇴",
-            ["da"] = "🇩🇰",
-            ["fi"] = "🇫🇮",
-        };
-
-        public string Code  { get; }
-        public string Name  { get; }
-        public LangItem(string code, string name)
-        {
-            Code = code.ToUpperInvariant();
-            // Strip any leading emoji/flag characters and whitespace
-            // (_language in JSON files may contain e.g. "🇬🇧  English")
-            var trimmed = name.TrimStart();
-            int i = 0;
-            while (i < trimmed.Length)
+            static int[] Parse(string v)
             {
-                var cat = char.GetUnicodeCategory(trimmed[i]);
-                // Skip regional indicator letters (flags) and spaces
-                if (trimmed[i] > 127 || trimmed[i] == ' ')
-                    i++;
+                var parts = v.TrimStart('v','V').Split('.');
+                return parts.Select(p => int.TryParse(p, out int n) ? n : 0).ToArray();
+            }
+            var c = Parse(current);
+            var p = Parse(previous);
+            int len = Math.Max(c.Length, p.Length);
+            for (int i = 0; i < len; i++)
+            {
+                int cv = i < c.Length ? c[i] : 0;
+                int pv = i < p.Length ? p[i] : 0;
+                if (cv != pv) return cv > pv;
+            }
+            return false;
+        }
+
+        public void UpdateRulesColumnVisibility()
+        {
+            bool show = ConfigSvc.Config.ShowTunnelRulesColumn;
+            var vis   = show ? Visibility.Visible : Visibility.Collapsed;
+
+            // Header column
+            if (RulesColHeader != null) RulesColHeader.Visibility = vis;
+
+            // Collapse the column width so it takes no space when hidden
+            // The header bar and DataTemplate both use a 5-column Grid.
+            // We can't easily set ColumnDefinition.Width from code-behind on a DataTemplate,
+            // but setting the header TextBlock to Collapsed shrinks visually;
+            // the row cells are also bound to Visibility via the converter-free approach below.
+            // Best approach: tag the ListView with a resource key and update all rendered rows.
+            foreach (var item in TunnelsListView.Items)
+            {
+                var container = TunnelsListView.ItemContainerGenerator
+                    .ContainerFromItem(item) as System.Windows.Controls.ListViewItem;
+                if (container == null) continue;
+                var cell = FindChild<System.Windows.Controls.TextBlock>(container,
+                    tb => tb.GetValue(System.Windows.FrameworkElement.NameProperty) as string == "RulesCountCell"
+                          || (tb.Text != null && tb.DataContext is TunnelEntryViewModel));
+                if (cell != null) cell.Visibility = vis;
+            }
+        }
+
+        private static T? FindChild<T>(DependencyObject parent, Func<T, bool>? predicate = null)
+            where T : DependencyObject
+        {
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, i);
+                if (child is T t && (predicate == null || predicate(t))) return t;
+                var found = FindChild<T>(child, predicate);
+                if (found != null) return found;
+            }
+            return null;
+        }
+
+        private void TunnelItem_RightClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (sender is not System.Windows.Controls.ListViewItem item) return;
+            var entry = item.DataContext as TunnelEntryViewModel;
+            if (entry == null) return;
+            e.Handled = true;
+
+            ShowTunnelPopup(entry, e);
+        }
+
+        private Window? _tunnelPopup;
+
+        private void ShowTunnelPopup(TunnelEntryViewModel entry,
+            System.Windows.Input.MouseButtonEventArgs mouseEvent)
+        {
+            _tunnelPopup?.Close();
+
+            var surface   = (Brush)FindResource("Surface");
+            var textPri   = (Brush)FindResource("TextPrimary");
+            var textMuted = (Brush)FindResource("TextMuted");
+            var accent    = (Brush)FindResource("Accent");
+            var success   = (Brush)FindResource("Success");
+            var border    = (Brush)FindResource("BorderColor");
+            var hover     = (Brush)FindResource("ListHover");
+            var fontFam   = (System.Windows.Media.FontFamily)FindResource("Theme.FontFamily");
+            var corner    = (CornerRadius)FindResource("Theme.CornerRadius");
+
+            // ── Build menu items ──────────────────────────────────────────────
+            var items = new List<(string label, Brush icon, Action action)>();
+
+            if (entry.IsDefaultTunnel)
+                items.Add(("Clear default action tunnel", textMuted,
+                    () => { ConfigSvc.Config.DefaultAction = "none";
+                            ConfigSvc.Config.DefaultTunnel = "";
+                            ApplyDefaultTunnelChange(); }));
+            else
+                items.Add(("⚡  Set as default action tunnel", accent,
+                    () => { ConfigSvc.Config.DefaultAction = "activate";
+                            ConfigSvc.Config.DefaultTunnel = entry.Name;
+                            ApplyDefaultTunnelChange(); }));
+
+            if (entry.IsOpenProtection)
+                items.Add(("Clear open network protection", textMuted,
+                    () => { ConfigSvc.Config.OpenWifiTunnel = "";
+                            ApplyDefaultTunnelChange(); }));
+            else
+                items.Add(("🔓  Set as open network protection", success,
+                    () => { ConfigSvc.Config.OpenWifiTunnel = entry.Name;
+                            ApplyDefaultTunnelChange(); }));
+
+            // ── Build the popup window ────────────────────────────────────────
+            var popup = new Window
+            {
+                WindowStyle         = WindowStyle.None,
+                AllowsTransparency  = true,
+                Background          = System.Windows.Media.Brushes.Transparent,
+                ResizeMode          = ResizeMode.NoResize,
+                ShowInTaskbar       = false,
+                SizeToContent       = SizeToContent.WidthAndHeight,
+                Topmost             = true,
+                Owner               = this,
+            };
+
+            var stack = new System.Windows.Controls.StackPanel { Background = surface };
+
+            foreach (var (label, iconBrush, action) in items)
+            {
+                var row = new System.Windows.Controls.Border
+                {
+                    Background    = System.Windows.Media.Brushes.Transparent,
+                    Padding       = new Thickness(14, 9, 14, 9),
+                };
+                var tb = new System.Windows.Controls.TextBlock
+                {
+                    Text       = label,
+                    Foreground = iconBrush,
+                    FontFamily = fontFam,
+                    FontSize   = 12,
+                };
+                row.Child = tb;
+
+                var capturedAction = action;
+                row.MouseEnter += (_, _) => row.Background = hover;
+                row.MouseLeave += (_, _) => row.Background = System.Windows.Media.Brushes.Transparent;
+                row.MouseLeftButtonUp += (_, _) =>
+                {
+                    try { if (popup.IsLoaded) popup.Close(); } catch { }
+                    _tunnelPopup = null;
+                    capturedAction();
+                };
+                row.Cursor = System.Windows.Input.Cursors.Hand;
+                stack.Children.Add(row);
+
+                // Separator between items
+                if (label != items[^1].label)
+                    stack.Children.Add(new System.Windows.Controls.Border
+                    {
+                        Height     = 1,
+                        Background = border,
+                        Margin     = new Thickness(0),
+                    });
+            }
+
+            popup.Content = new System.Windows.Controls.Border
+            {
+                Background      = surface,
+                BorderBrush     = border,
+                BorderThickness = new Thickness(1),
+                CornerRadius    = corner,
+                Child           = stack,
+                Effect          = new System.Windows.Media.Effects.DropShadowEffect
+                {
+                    Color     = System.Windows.Media.Colors.Black,
+                    Opacity   = 0.4,
+                    BlurRadius= 12,
+                    ShadowDepth = 3,
+                    Direction = 270,
+                },
+            };
+
+            // Position at the exact mouse click point (DPI-aware)
+            var mousePos   = mouseEvent.GetPosition(this);
+            var screenPt   = PointToScreen(mousePos);
+            // Convert from physical pixels to WPF DIPs
+            var source     = PresentationSource.FromVisual(this);
+            double dpiX    = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+            double dpiY    = source?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
+            popup.Left     = screenPt.X / dpiX;
+            popup.Top      = screenPt.Y / dpiY;
+
+            popup.Deactivated += (_, _) =>
+            {
+                try { if (popup.IsLoaded) popup.Close(); } catch { }
+                _tunnelPopup = null;
+            };
+            popup.KeyDown += (_, ke) =>
+            {
+                if (ke.Key == System.Windows.Input.Key.Escape)
+                {
+                    try { if (popup.IsLoaded) popup.Close(); } catch { }
+                    _tunnelPopup = null;
+                }
+            };
+
+            _tunnelPopup = popup;
+            popup.Show();
+        }
+
+        // ── WiFi rule drag-to-reorder ─────────────────────────────────────────
+        private WifiRuleRow? _dragRule;
+        private System.Windows.Point _rulesDragStart;
+
+        private void WifiRule_PreviewMouseDown(object sender,
+            System.Windows.Input.MouseButtonEventArgs e)
+        {
+            _rulesDragStart = e.GetPosition(null);
+            _dragRule       = (e.OriginalSource as FrameworkElement)
+                              ?.DataContext as WifiRuleRow;
+        }
+
+        private void WifiRule_PreviewMouseMove(object sender,
+            System.Windows.Input.MouseEventArgs e)
+        {
+            if (_dragRule == null || e.LeftButton != System.Windows.Input.MouseButtonState.Pressed) return;
+            var delta = e.GetPosition(null) - _rulesDragStart;
+            if (Math.Abs(delta.X) < 4 && Math.Abs(delta.Y) < 4) return;
+            DragDrop.DoDragDrop(WifiRulesListView, _dragRule,
+                DragDropEffects.Move);
+            _dragRule = null;
+        }
+
+        private void WifiRule_Drop(object sender, DragEventArgs e)
+        {
+            if (e.Data.GetData(typeof(WifiRuleRow)) is not WifiRuleRow draggedRow) return;
+            var target = (e.OriginalSource as FrameworkElement)
+                         ?.DataContext as WifiRuleRow;
+            if (target == null || target == draggedRow) return;
+
+            var rules = ConfigSvc.Config.Rules;
+            var srcRule = rules.FirstOrDefault(r => r.Ssid == draggedRow.Ssid);
+            var tgtRule = rules.FirstOrDefault(r => r.Ssid == target.Ssid);
+            if (srcRule == null || tgtRule == null) return;
+
+            int si = rules.IndexOf(srcRule);
+            int ti = rules.IndexOf(tgtRule);
+            rules.RemoveAt(si);
+            rules.Insert(ti, srcRule);
+            ConfigSvc.Save();
+            RefreshWifiRulesPanel();
+        }
+
+        // ── WiFi rule edit buttons ────────────────────────────────────────────
+        private void WifiRulesListView_SelectionChanged(object sender,
+            System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            bool hasSelection = WifiRulesListView.SelectedItem != null;
+            if (WifiRuleEditBtn   != null) WifiRuleEditBtn.IsEnabled   = hasSelection;
+            if (WifiRuleDeleteBtn != null) WifiRuleDeleteBtn.IsEnabled = hasSelection;
+        }
+
+        private void WifiRuleAdd_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Views.RuleDialog(
+                WifiSvc.CurrentSsid,
+                tunnels: GetTunnelNames())
+                { Owner = this };
+            if (dlg.ShowDialog() != true) return;
+            var rule = new Models.TunnelRule
+                { Name = dlg.ResultName, Ssid = dlg.ResultSsid, Tunnel = dlg.ResultTunnel };
+            ConfigSvc.Config.Rules.Add(rule);
+            ConfigSvc.Save();
+            LogSvc.Ok($"Rule added: {rule.Ssid}");
+            RefreshWifiRulesPanel();
+            _vm.RebuildTunnelList();
+        }
+
+        private void WifiRuleEdit_Click(object sender, RoutedEventArgs e)
+        {
+            if (WifiRulesListView.SelectedItem is not WifiRuleRow row) return;
+            var rule = ConfigSvc.Config.Rules
+                .FirstOrDefault(r => r.Ssid == row.Ssid);
+            if (rule == null) return;
+
+            var dlg = new Views.RuleDialog(
+                WifiSvc.CurrentSsid,
+                existingName:   rule.Name,
+                existingSsid:   rule.Ssid,
+                existingTunnel: rule.Tunnel,
+                tunnels:        GetTunnelNames())
+                { Owner = this };
+            if (dlg.ShowDialog() != true) return;
+            rule.Name   = dlg.ResultName;
+            rule.Ssid   = dlg.ResultSsid;
+            rule.Tunnel = dlg.ResultTunnel;
+            ConfigSvc.Save();
+            LogSvc.Ok($"Rule updated: {rule.Ssid}");
+            RefreshWifiRulesPanel();
+            _vm.RebuildTunnelList();
+        }
+
+        private void WifiRuleDelete_Click(object sender, RoutedEventArgs e)
+        {
+            if (WifiRulesListView.SelectedItem is not WifiRuleRow row) return;
+            var rule = ConfigSvc.Config.Rules
+                .FirstOrDefault(r => r.Ssid == row.Ssid && r.Tunnel == row.TunnelName);
+            if (rule == null) return;
+            if (!ShowThemedYesNo($"Delete rule for \"{rule.Ssid}\"?", "Delete rule")) return;
+            ConfigSvc.Config.Rules.Remove(rule);
+            ConfigSvc.Save();
+            LogSvc.Ok($"Rule deleted: {rule.Ssid}");
+            RefreshWifiRulesPanel();
+            _vm.RebuildTunnelList();
+        }
+
+        // ── Defaults popup ────────────────────────────────────────────────────
+        private void DefaultsBtn_Click(object sender, RoutedEventArgs e)
+        {
+            var surface   = (Brush)FindResource("Surface");
+            var cardBg    = (Brush)FindResource("CardBg");
+            var textPri   = (Brush)FindResource("TextPrimary");
+            var textMuted = (Brush)FindResource("TextMuted");
+            var accent    = (Brush)FindResource("Accent");
+            var success   = (Brush)FindResource("Success");
+            var border    = (Brush)FindResource("BorderColor");
+            var fontFam   = (System.Windows.Media.FontFamily)FindResource("Theme.FontFamily");
+            var corner    = (CornerRadius)FindResource("Theme.CornerRadius");
+
+            var tunnelNames = _vm.TunnelList.Select(t => t.Name).ToList();
+
+            // ── Build popup window ────────────────────────────────────────────
+            var popup = new Window
+            {
+                WindowStyle        = WindowStyle.None,
+                AllowsTransparency = true,
+                Background         = System.Windows.Media.Brushes.Transparent,
+                ResizeMode         = ResizeMode.NoResize,
+                ShowInTaskbar      = false,
+                SizeToContent      = SizeToContent.WidthAndHeight,
+                Width              = 360,
+                Owner              = this,
+            };
+
+            var root = new System.Windows.Controls.Border
+            {
+                Background      = surface,
+                BorderBrush     = border,
+                BorderThickness = new Thickness(1),
+                CornerRadius    = corner,
+                Padding         = new Thickness(0),
+                Effect          = new System.Windows.Media.Effects.DropShadowEffect
+                {
+                    Color = Colors.Black, Opacity = 0.45,
+                    BlurRadius = 14, ShadowDepth = 3, Direction = 270,
+                },
+            };
+
+            var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(0) };
+
+            // Header
+            var hdr = new System.Windows.Controls.Border
+            {
+                Background    = cardBg,
+                CornerRadius  = new CornerRadius(corner.TopLeft, corner.TopRight, 0, 0),
+                Padding       = new Thickness(14, 10, 14, 10),
+                BorderBrush   = border,
+                BorderThickness = new Thickness(0,0,0,1),
+            };
+            hdr.Child = new System.Windows.Controls.TextBlock
+            {
+                Text = "Defaults", FontFamily = fontFam,
+                FontSize = 12, FontWeight = FontWeights.SemiBold,
+                Foreground = accent,
+            };
+            panel.Children.Add(hdr);
+
+            // Helper to make a picker row
+            System.Windows.Controls.ComboBox MakeRow(string emoji, string label,
+                string currentValue, bool addClearOption)
+            {
+                var row = new System.Windows.Controls.Border
+                    { Padding = new Thickness(14, 10, 14, 6) };
+                var g = new Grid();
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+                var lbl = new System.Windows.Controls.TextBlock
+                {
+                    Text = $"{emoji}  {label}", FontFamily = fontFam, FontSize = 11,
+                    Foreground = textPri, VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0,0,12,0),
+                };
+                Grid.SetColumn(lbl, 0);
+
+                var cb = new System.Windows.Controls.ComboBox
+                {
+                    FontFamily = fontFam, FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
+                };
+                if (addClearOption) cb.Items.Add("— clear —");
+                foreach (var t in tunnelNames) cb.Items.Add(t);
+                cb.SelectedItem = tunnelNames.Contains(currentValue) ? currentValue
+                    : (addClearOption ? "— clear —" : null);
+                Grid.SetColumn(cb, 1);
+
+                g.Children.Add(lbl);
+                g.Children.Add(cb);
+                row.Child = g;
+                panel.Children.Add(row);
+                return cb;
+            }
+
+            string curDefault = ConfigSvc.Config.DefaultAction == "activate"
+                ? ConfigSvc.Config.DefaultTunnel : "";
+            string curOpen    = ConfigSvc.Config.OpenWifiTunnel;
+
+            var defaultPicker = MakeRow("⚡", "Default action tunnel",    curDefault, true);
+            var openPicker    = MakeRow("🔓", "Open network protection", curOpen,    true);
+
+            // Separator
+            panel.Children.Add(new System.Windows.Controls.Border
+                { Height = 1, Background = border });
+
+            // Buttons row
+            var btnRow = new System.Windows.Controls.Border
+                { Padding = new Thickness(14, 8, 14, 10) };
+            var btnGrid = new Grid();
+            btnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            btnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            btnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var btnCancel = new System.Windows.Controls.Button
+            {
+                Content = "Cancel", FontFamily = fontFam, FontSize = 11,
+                Style = (Style)Application.Current.Resources["FlatBtn"],
+                Padding = new Thickness(14,5,14,5), Margin = new Thickness(0,0,8,0),
+            };
+            var btnSave = new System.Windows.Controls.Button
+            {
+                Content = "Save", FontFamily = fontFam, FontSize = 11,
+                Style = (Style)Application.Current.Resources["PrimaryBtn"],
+                Padding = new Thickness(14,5,14,5),
+            };
+            Grid.SetColumn(btnCancel, 1);
+            Grid.SetColumn(btnSave,   2);
+            btnGrid.Children.Add(btnCancel);
+            btnGrid.Children.Add(btnSave);
+            btnRow.Child = btnGrid;
+            panel.Children.Add(btnRow);
+
+            root.Child = panel;
+            popup.Content = root;
+
+            btnCancel.Click += (_, _) => popup.Close();
+            btnSave.Click   += (_, _) =>
+            {
+                var defSel  = defaultPicker.SelectedItem as string ?? "";
+                var openSel = openPicker.SelectedItem   as string ?? "";
+
+                if (defSel == "— clear —" || string.IsNullOrEmpty(defSel))
+                {
+                    ConfigSvc.Config.DefaultAction = "none";
+                    ConfigSvc.Config.DefaultTunnel = "";
+                }
                 else
-                    break;
-            }
-            Name = i > 0 && i < trimmed.Length ? trimmed[i..].TrimStart() : trimmed;
-        }
-        public override string ToString() => $"[{Code}] {Name}";
-    }
+                {
+                    ConfigSvc.Config.DefaultAction = "activate";
+                    ConfigSvc.Config.DefaultTunnel = defSel;
+                }
 
-    public class ThemePickerItem
-    {
-        public string FolderName   { get; }
-        public string DisplayName  { get; }
-        public ThemePickerItem(string folder, string display)
-        {
-            FolderName  = folder;
-            DisplayName = display;
+                ConfigSvc.Config.OpenWifiTunnel = openSel == "— clear —" ? "" : openSel;
+
+                ConfigSvc.Save();
+                NotifyAllBadges();
+                UpdateStatusBarCentre();
+                RefreshWifiRulesPanel();
+                _vm.RebuildTunnelList();
+                ApplyGroupFilter();
+                popup.Close();
+            };
+
+            // Position centred on main window
+            popup.Loaded += (_, _) =>
+            {
+                var winPos  = PointToScreen(new Point(0, 0));
+                var source  = PresentationSource.FromVisual(this);
+                double dpiX = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+                double dpiY = source?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
+                popup.Left  = winPos.X / dpiX + (ActualWidth  - popup.ActualWidth)  / 2;
+                popup.Top   = winPos.Y / dpiY + (ActualHeight - popup.ActualHeight) / 2;
+            };
+            popup.Deactivated += (_, _) =>
+            {
+                try { if (popup.IsLoaded) popup.Close(); } catch { }
+            };
+
+            popup.Show();
         }
-        public override string ToString() => DisplayName;
+        private void TunnelContextMenu_Opened(object sender, RoutedEventArgs e)
+        {
+            if (sender is not System.Windows.Controls.ContextMenu cm) return;
+            var entry = (cm.PlacementTarget as System.Windows.Controls.ListViewItem)
+                        ?.DataContext as TunnelEntryViewModel;
+            if (entry == null) return;
+            if (cm.FindName("MenuSetDefault")         is System.Windows.Controls.MenuItem ms)
+                ms.Visibility  = entry.IsDefaultTunnel  ? Visibility.Collapsed : Visibility.Visible;
+            if (cm.FindName("MenuClearDefault")       is System.Windows.Controls.MenuItem mc)
+                mc.Visibility  = entry.IsDefaultTunnel  ? Visibility.Visible   : Visibility.Collapsed;
+            if (cm.FindName("MenuSetOpenProtection")  is System.Windows.Controls.MenuItem mo)
+                mo.Visibility  = entry.IsOpenProtection ? Visibility.Collapsed : Visibility.Visible;
+            if (cm.FindName("MenuClearOpenProtection")is System.Windows.Controls.MenuItem mp)
+                mp.Visibility  = entry.IsOpenProtection ? Visibility.Visible   : Visibility.Collapsed;
+        }
+
+        private TunnelEntryViewModel? GetContextMenuEntry(object sender)
+        {
+            if (sender is not System.Windows.Controls.MenuItem mi) return null;
+            return (mi.Parent as System.Windows.Controls.ContextMenu)?.Tag
+                   as TunnelEntryViewModel;
+        }
+
+        private void ApplyDefaultTunnelChange()
+        {
+            ConfigSvc.Save();
+            UpdateStatusBarCentre();
+            RefreshWifiRulesPanel();
+            _vm.RebuildTunnelList();
+            NotifyAllBadges();
+            ApplyGroupFilter();
+        }
+
+        private void NotifyAllBadges()
+        {
+            foreach (var t in _vm.TunnelList) t.NotifyBadgesChanged();
+        }
+
+        private void MenuSetDefault_Click(object s, RoutedEventArgs e)
+        {
+            var entry = GetContextMenuEntry(s); if (entry == null) return;
+            ConfigSvc.Config.DefaultAction = "activate";
+            ConfigSvc.Config.DefaultTunnel = entry.Name;
+            ApplyDefaultTunnelChange();
+        }
+
+        private void MenuClearDefault_Click(object s, RoutedEventArgs e)
+        {
+            if (GetContextMenuEntry(s) == null) return;
+            ConfigSvc.Config.DefaultAction = "none";
+            ConfigSvc.Config.DefaultTunnel = "";
+            ApplyDefaultTunnelChange();
+        }
+
+        private void MenuSetOpenProtection_Click(object s, RoutedEventArgs e)
+        {
+            var entry = GetContextMenuEntry(s); if (entry == null) return;
+            ConfigSvc.Config.OpenWifiTunnel = entry.Name;
+            ApplyDefaultTunnelChange();
+        }
+
+        private void MenuClearOpenProtection_Click(object s, RoutedEventArgs e)
+        {
+            if (GetContextMenuEntry(s) == null) return;
+            ConfigSvc.Config.OpenWifiTunnel = "";
+            ApplyDefaultTunnelChange();
+        }
+
+        public void UpdateStatusBarCentre()
+        {
+            var def  = ConfigSvc.Config.DefaultTunnel;
+            var open = ConfigSvc.Config.OpenWifiTunnel;
+            bool showDef  = !string.IsNullOrEmpty(def)  && ConfigSvc.Config.DefaultAction == "activate";
+            bool showOpen = !string.IsNullOrEmpty(open);
+
+            DefaultTunnelLabel.Text       = showDef  ? $"⚡ {def}"  : "";
+            OpenProtectionLabel.Text      = showOpen ? $"🔓 {open}" : "";
+            DefaultTunnelLabel.Visibility  = showDef  ? Visibility.Visible : Visibility.Collapsed;
+            OpenProtectionLabel.Visibility = showOpen ? Visibility.Visible : Visibility.Collapsed;
+            StatusCentreSep.Visibility     = showDef && showOpen
+                ? Visibility.Visible : Visibility.Collapsed;
+
+            DefaultTunnelLabel.ToolTip  = showDef
+                ? $"Default action: activate \"{def}\"\nActivates when no WiFi rule matches the current network"
+                : null;
+            OpenProtectionLabel.ToolTip = showOpen
+                ? $"Open network protection: \"{open}\"\nActivates automatically when joining a passwordless WiFi network"
+                : null;
+        }
+
+        private void RuleCount_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (sender is System.Windows.Controls.TextBlock tb &&
+                tb.DataContext is TunnelEntryViewModel vm &&
+                vm.RuleCount > 0)
+            {
+                e.Handled = true;
+                HighlightRulesForTunnel(vm.Name);
+            }
+        }
+
+        // ── WiFi Rules panel ──────────────────────────────────────────────────
+        private string? _activeRuleFilter; // tunnel name currently highlighted
+
+        public void HighlightRulesForTunnel(string tunnelName)
+        {
+            // Toggle: clicking the same tunnel again clears the filter
+            _activeRuleFilter = _activeRuleFilter == tunnelName ? null : tunnelName;
+            RefreshWifiRulesPanel();
+        }
+
+        public void RefreshWifiRulesPanel()
+        {
+            bool manualMode = ConfigSvc.Config.ManualMode;
+            bool showPanel  = ConfigSvc.Config.ShowWifiRulesOnMainWindow && !manualMode;
+
+            if (WifiRulesPanel       != null) WifiRulesPanel.Visibility       = showPanel ? Visibility.Visible : Visibility.Collapsed;
+            if (WifiRulesHeader      != null) WifiRulesHeader.Visibility      = showPanel ? Visibility.Visible : Visibility.Collapsed;
+            if (WifiRuleButtonsPanel != null) WifiRuleButtonsPanel.Visibility = showPanel ? Visibility.Visible : Visibility.Collapsed;
+
+            // Collapse/restore the grid rows so the tunnel box fills available space
+            var zero = new GridLength(0);
+            var star = new GridLength(1, GridUnitType.Star);
+            var auto = GridLength.Auto;
+            if (WifiRulesHeaderRow != null) WifiRulesHeaderRow.Height = showPanel ? auto : zero;
+            if (WifiRulesPanelRow  != null) WifiRulesPanelRow.Height  = showPanel ? star : zero;
+            if (WifiRulesBtnsRow   != null) WifiRulesBtnsRow.Height   = showPanel ? auto : zero;
+
+            if (!showPanel) { _activeRuleFilter = null; return; }
+
+            var rules = ConfigSvc.Config.Rules;
+            if (WifiRuleCountLabel != null)
+                WifiRuleCountLabel.Text = rules.Count.ToString();
+
+            WifiRulesListView.ItemsSource = rules
+                .Select(r => new WifiRuleRow(r, _activeRuleFilter, this))
+                .ToList();
+        }
+
+        private sealed class WifiRuleRow
+        {
+            public string RuleName      { get; }
+            public string Ssid          { get; }
+            public string ActionLabel   { get; }
+            public string TunnelName    { get; }
+            public bool   IsHighlighted { get; }
+            public int    ExecutionCount { get; }
+            public string ExecutionCountText => ExecutionCount > 0 ? ExecutionCount.ToString() : "0";
+
+            public System.Windows.Media.Brush ExecutionCountColor =>
+                ExecutionCount > 0
+                    ? (System.Windows.Media.Brush)(System.Windows.Application.Current
+                        .Resources["Accent"] ?? System.Windows.Media.Brushes.CornflowerBlue)
+                    : (System.Windows.Media.Brush)(System.Windows.Application.Current
+                        .Resources["TextMuted"] ?? System.Windows.Media.Brushes.Gray);
+
+            public System.Windows.FontWeight TunnelFontWeight =>
+                IsHighlighted ? System.Windows.FontWeights.Bold : System.Windows.FontWeights.Normal;
+
+            public System.Windows.Media.Brush RowBg =>
+                IsHighlighted
+                    ? new System.Windows.Media.SolidColorBrush(
+                          System.Windows.Media.Color.FromArgb(30, 96, 165, 250))
+                    : System.Windows.Media.Brushes.Transparent;
+
+            public System.Windows.Media.Brush BorderBrush =>
+                IsHighlighted
+                    ? (System.Windows.Media.Brush)(System.Windows.Application.Current
+                        .Resources["Accent"] ?? System.Windows.Media.Brushes.CornflowerBlue)
+                    : System.Windows.Media.Brushes.Transparent;
+
+            public System.Windows.Thickness BorderThick =>
+                new(IsHighlighted ? 2 : 0, 0, 0, 0);
+
+            public System.Windows.Media.Brush TunnelFg =>
+                IsHighlighted
+                    ? (System.Windows.Media.Brush)(System.Windows.Application.Current
+                        .Resources["Accent"] ?? System.Windows.Media.Brushes.CornflowerBlue)
+                    : (System.Windows.Media.Brush)(System.Windows.Application.Current
+                        .Resources["TextMuted"] ?? System.Windows.Media.Brushes.Gray);
+
+            private readonly MainWindow _main;
+
+            public WifiRuleRow(Models.TunnelRule r, string? filter, MainWindow main)
+            {
+                _main          = main;
+                // Display name: use stored name or auto-generate
+                var autoName   = string.IsNullOrEmpty(r.Tunnel)
+                    ? $"{(string.IsNullOrEmpty(r.Ssid) ? "—" : r.Ssid)} → disconnect"
+                    : $"{(string.IsNullOrEmpty(r.Ssid) ? "—" : r.Ssid)} → {r.Tunnel}";
+                RuleName       = string.IsNullOrEmpty(r.Name) ? autoName : r.Name;
+                Ssid           = string.IsNullOrEmpty(r.Ssid) ? "—" : r.Ssid;
+                TunnelName     = string.IsNullOrEmpty(r.Tunnel) ? "" : r.Tunnel;
+                ActionLabel    = string.IsNullOrEmpty(r.Tunnel)
+                    ? Lang.T("RuleActionDisconnect")
+                    : Lang.T("RuleActionConnect");
+                IsHighlighted  = filter != null && r.Tunnel == filter;
+                ExecutionCount = r.ExecutionCount;
+            }
+        }
+
+        // ── App run mode ──────────────────────────────────────────────────────
+        public enum AppRunModeKind { Standalone, ManagedPortable, Managed }
+
+        public AppRunModeKind AppRunMode
+        {
+            get
+            {
+                var installed = GetInstalledPath();
+                if (installed == null) return AppRunModeKind.Standalone;
+
+                var exePath = Environment.ProcessPath;
+                var current = string.IsNullOrEmpty(exePath)
+                    ? AppContext.BaseDirectory.TrimEnd('\\', '/')
+                    : System.IO.Path.GetDirectoryName(exePath) ?? "";
+
+                return string.Equals(
+                    System.IO.Path.GetFullPath(current),
+                    System.IO.Path.GetFullPath(installed),
+                    StringComparison.OrdinalIgnoreCase)
+                    ? AppRunModeKind.Managed
+                    : AppRunModeKind.ManagedPortable;
+            }
+        }
+
+        /// <summary>
+        /// Shows a themed Yes/No dialog matching the app's current theme.
+        /// Returns true if Yes was clicked.
+        /// </summary>
+        public bool ShowThemedYesNo(string message, string title)
+        {
+            bool result = false;
+            var win = new Window
+            {
+                WindowStyle           = WindowStyle.None,
+                AllowsTransparency    = true,
+                Background            = System.Windows.Media.Brushes.Transparent,
+                Width                 = 400,
+                SizeToContent         = SizeToContent.Height,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner                 = this,
+                ResizeMode            = ResizeMode.NoResize,
+            };
+
+            var border = new System.Windows.Controls.Border
+            {
+                Background      = (System.Windows.Media.Brush)Application.Current.Resources["WindowBg"],
+                BorderBrush     = (System.Windows.Media.Brush)Application.Current.Resources["BorderColor"],
+                BorderThickness = new Thickness(1),
+                CornerRadius    = new System.Windows.CornerRadius(6),
+                Padding         = new Thickness(20),
+            };
+
+            var panel = new System.Windows.Controls.StackPanel();
+
+            panel.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text       = title,
+                FontSize   = 12, FontWeight = FontWeights.Bold,
+                Foreground = (System.Windows.Media.Brush)Application.Current.Resources["TextPrimary"],
+                Margin     = new Thickness(0, 0, 0, 10),
+            });
+            panel.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text         = message,
+                FontSize     = 11,
+                Foreground   = (System.Windows.Media.Brush)Application.Current.Resources["TextMuted"],
+                TextWrapping = TextWrapping.Wrap,
+                Margin       = new Thickness(0, 0, 0, 16),
+            });
+
+            var btns = new System.Windows.Controls.StackPanel
+            {
+                Orientation         = System.Windows.Controls.Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+            };
+            var btnNo  = new System.Windows.Controls.Button { Content = Lang.T("BtnNo"),  Style = (Style)Application.Current.Resources["FlatBtn"],    Padding = new Thickness(14,6,14,6), Margin = new Thickness(0,0,8,0) };
+            var btnYes = new System.Windows.Controls.Button { Content = Lang.T("BtnYes"), Style = (Style)Application.Current.Resources["SuccessBtn"], Padding = new Thickness(14,6,14,6) };
+            btnNo.Click  += (_, _) => { result = false; win.Close(); };
+            btnYes.Click += (_, _) => { result = true;  win.Close(); };
+            btns.Children.Add(btnNo);
+            btns.Children.Add(btnYes);
+            panel.Children.Add(btns);
+            border.Child = panel;
+            win.Content  = border;
+            win.ShowDialog();
+            return result;
+        }
+
+        private void ShowPortableInstallPrompt()
+        {
+            // Custom dialog with "Don't ask again" checkbox
+            var win = new Window
+            {
+                WindowStyle           = WindowStyle.None,
+                AllowsTransparency    = true,
+                Background            = System.Windows.Media.Brushes.Transparent,
+                Width                 = 420,
+                SizeToContent         = SizeToContent.Height,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner                 = this,
+                ResizeMode            = ResizeMode.NoResize,
+            };
+
+            bool suppress = false;
+            bool install  = false;
+
+            var border = new System.Windows.Controls.Border
+            {
+                Background      = (System.Windows.Media.Brush)Application.Current.Resources["WindowBg"],
+                BorderBrush     = (System.Windows.Media.Brush)Application.Current.Resources["BorderColor"],
+                BorderThickness = new Thickness(1),
+                CornerRadius    = new System.Windows.CornerRadius(6),
+                Padding         = new Thickness(20),
+            };
+
+            var panel = new System.Windows.Controls.StackPanel();
+
+            var title = new System.Windows.Controls.TextBlock
+            {
+                Text       = Lang.T("InstallPortableTitle"),
+                FontSize   = 13, FontWeight = FontWeights.Bold,
+                Foreground = (System.Windows.Media.Brush)Application.Current.Resources["TextPrimary"],
+                Margin     = new Thickness(0, 0, 0, 10),
+            };
+            var body = new System.Windows.Controls.TextBlock
+            {
+                Text        = Lang.T("InstallPortablePrompt"),
+                FontSize    = 11,
+                Foreground  = (System.Windows.Media.Brush)Application.Current.Resources["TextMuted"],
+                TextWrapping= TextWrapping.Wrap,
+                Margin      = new Thickness(0, 0, 0, 10),
+            };
+            var chk = new System.Windows.Controls.CheckBox
+            {
+                Content    = Lang.T("InstallPortableDoNotAsk"),
+                FontSize   = 10,
+                Foreground = (System.Windows.Media.Brush)Application.Current.Resources["TextMuted"],
+                Margin     = new Thickness(0, 0, 0, 14),
+            };
+            chk.Checked   += (_, _) => suppress = true;
+            chk.Unchecked += (_, _) => suppress = false;
+
+            var btns = new System.Windows.Controls.StackPanel
+            {
+                Orientation = System.Windows.Controls.Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+            };
+            var btnNo  = new System.Windows.Controls.Button { Content = Lang.T("BtnCancel"), Style = (Style)Application.Current.Resources["FlatBtn"], Padding = new Thickness(14,6,14,6), Margin = new Thickness(0,0,8,0) };
+            var btnYes = new System.Windows.Controls.Button { Content = Lang.T("BtnInstall"), Style = (Style)Application.Current.Resources["SuccessBtn"], Padding = new Thickness(14,6,14,6) };
+            btnNo.Click  += (_, _) => { install = false; win.Close(); };
+            btnYes.Click += (_, _) => { install = true;  win.Close(); };
+            btns.Children.Add(btnNo);
+            btns.Children.Add(btnYes);
+
+            panel.Children.Add(title);
+            panel.Children.Add(body);
+            panel.Children.Add(chk);
+            panel.Children.Add(btns);
+            border.Child = panel;
+            win.Content  = border;
+            win.ShowDialog();
+
+            if (suppress)
+            {
+                ConfigSvc.Config.SuppressPortableUpdatePrompt = true;
+                ConfigSvc.Save();
+            }
+            if (install)
+                RunInstallPublic();
+        }
+
+        // ── Update check frequency ────────────────────────────────────────────
+        private bool ShouldCheckForUpdates()
+        {
+            var freq = ConfigSvc.Config.UpdateCheckFrequency ?? "weekly";
+            if (freq == "manual") return false;
+
+            var last = ConfigSvc.Config.LastUpdateCheck;
+            double daysSince = (DateTime.UtcNow - last).TotalDays;
+
+            return freq switch
+            {
+                "onstart" => true,
+                "daily"   => daysSince >= 1,
+                "weekly"  => daysSince >= 7,
+                _         => daysSince >= 7,
+            };
+        }
+
+        public async System.Threading.Tasks.Task CheckForUpdatesAsync(bool silent)
+        {
+            try
+            {
+                var latest = await UpdateChecker.CheckNowAsync(ConfigSvc.Config, ConfigSvc.Save);
+                if (latest == null) return;
+
+                if (!UpdateChecker.IsNewerVersion(latest.TagName)) return;
+
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    var current = UpdateChecker.CurrentVersionString;
+                    if (ShowThemedYesNo(
+                        Lang.T("UpdateAvailableMsg", latest.TagName, current),
+                        Lang.T("UpdateAvailableTitle")))
+                        RunUpdate();
+                });
+            }
+            catch { /* silent — network may not be available */ }
+        }
+
+        // ── Install helpers (used by SettingsWindow) ──────────────────────────
+        private static readonly string InstallRegKey    = @"SOFTWARE\MasselGUARD";
+        private static readonly string InstallFolderName = "MasselGUARD";
+
+        public bool IsInstalledCheck() =>
+            GetInstalledPath() is string p &&
+            System.IO.File.Exists(System.IO.Path.Combine(p, "MasselGUARD.exe"));
+
+        public void RunInstallPublic()
+        {
+            var mode = AppRunMode;
+
+            if (mode == AppRunModeKind.Managed)
+            {
+                // Running FROM the install dir — only option is uninstall
+                RunUninstall();
+                return;
+            }
+
+            if (mode == AppRunModeKind.ManagedPortable)
+            {
+                // Running a separate copy while an installed version exists — offer overwrite
+                var installed = GetInstalledPath()!;
+                if (!ShowThemedYesNo(
+                    Lang.T("InstallOverwritePrompt", installed),
+                    Lang.T("InstallTitle")))
+                    return;
+                // Skip the folder picker and install directly to the existing location
+                DoInstall(installed);
+                return;
+            }
+
+            // Standalone — pick folder and install fresh
+            var defaultParent = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            string installDir = PickInstallFolder(defaultParent);
+            if (string.IsNullOrEmpty(installDir)) return;
+            DoInstall(installDir);
+        }
+
+        private void DoInstall(string installDir)
+        {
+            try
+            {
+                LogSvc.Info($"Installing to: {installDir}");
+                var currentExe = Environment.ProcessPath ?? AppContext.BaseDirectory;
+                var sourceDir  = System.IO.Path.GetDirectoryName(currentExe)!;
+
+                // 1. Copy files
+                System.IO.Directory.CreateDirectory(installDir);
+                foreach (var file in System.IO.Directory.GetFiles(sourceDir))
+                    System.IO.File.Copy(file,
+                        System.IO.Path.Combine(installDir,
+                            System.IO.Path.GetFileName(file)), overwrite: true);
+                CopyDirRecursive(sourceDir, installDir);
+
+                var installedExe = System.IO.Path.Combine(installDir, "MasselGUARD.exe");
+
+                // 2. Start Menu shortcut
+                var startMenuDir = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms),
+                    InstallFolderName);
+                System.IO.Directory.CreateDirectory(startMenuDir);
+                var shortcut = System.IO.Path.Combine(startMenuDir, "MasselGUARD.lnk");
+                RunPS($@"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{shortcut}');$s.TargetPath='{installedExe}';$s.WorkingDirectory='{installDir}';$s.Save()");
+
+                // 3. Registry + config
+                using (var key = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(InstallRegKey)!)
+                    key.SetValue("InstallPath", installDir);
+                ConfigSvc.Config.InstalledPath = installDir;
+                ConfigSvc.Save();
+
+                LogSvc.Ok(Lang.T("InstallDone"));
+
+                // 4. Auto-start — only ask if not already configured
+                if (!GetStartWithWindows())
+                {
+                    if (ShowThemedYesNo(Lang.T("InstallAutostart"), Lang.T("InstallAutostartTitle")))
+                    {
+                        RunPS($@"$a=New-ScheduledTaskAction -Execute '{installedExe}';$t=New-ScheduledTaskTrigger -AtLogOn;$p=New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest;Register-ScheduledTask -TaskName 'MasselGUARD' -Action $a -Trigger $t -Principal $p -Force");
+                        ConfigSvc.Config.StartWithWindows = true;
+                        ConfigSvc.Save();
+                        LogSvc.Ok(Lang.T("InstallScheduledOk"));
+                    }
+                }
+                else
+                {
+                    // Already configured — re-register with new exe path silently
+                    RunPS($@"$a=New-ScheduledTaskAction -Execute '{installedExe}';$t=New-ScheduledTaskTrigger -AtLogOn;$p=New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest;Register-ScheduledTask -TaskName 'MasselGUARD' -Action $a -Trigger $t -Principal $p -Force");
+                    LogSvc.Ok(Lang.T("InstallScheduledOk"));
+                }
+
+                // 5. Relaunch from installed location
+                LogSvc.Ok(Lang.T("InstallRestarting"));
+                System.Diagnostics.Process.Start(
+                    new System.Diagnostics.ProcessStartInfo(installedExe)
+                    { UseShellExecute = true });
+                Application.Current.Dispatcher.BeginInvoke(() =>
+                    ((App)Application.Current).ShutdownApp());
+            }
+            catch (Exception ex)
+            {
+                LogSvc.Warn($"Install failed: {ex.Message}");
+                MessageBox.Show(Lang.T("InstallFailed", ex.Message), Lang.T("InstallTitle"),
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void RunUninstall()
+        {
+            var installDir = GetInstalledPath();
+            if (installDir == null || !System.IO.Directory.Exists(installDir))
+            {
+                MessageBox.Show(Lang.T("NotInstalled"), Lang.T("UninstallTitle"),
+                    MessageBoxButton.OK, MessageBoxImage.Information); return;
+            }
+            if (MessageBox.Show(Lang.T("UninstallConfirm"), Lang.T("UninstallTitle"),
+                    MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+
+            bool keepConfig = MessageBox.Show(Lang.T("UninstallKeepConfig"),
+                Lang.T("UninstallKeepConfigTitle"),
+                MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+
+            try
+            {
+                LogSvc.Info("Uninstalling...");
+                RunPS("Unregister-ScheduledTask -TaskName 'MasselGUARD' -Confirm:$false -ErrorAction SilentlyContinue");
+                var startMenuDir = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms),
+                    InstallFolderName);
+                if (System.IO.Directory.Exists(startMenuDir))
+                    System.IO.Directory.Delete(startMenuDir, recursive: true);
+                Microsoft.Win32.Registry.LocalMachine.DeleteSubKey(InstallRegKey, false);
+                ConfigSvc.Config.InstalledPath = null;
+                ConfigSvc.Save();
+
+                if (!keepConfig)
+                {
+                    var appData = System.IO.Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                        "MasselGUARD");
+                    if (System.IO.Directory.Exists(appData))
+                        System.IO.Directory.Delete(appData, recursive: true);
+                }
+
+                var current = System.IO.Path.GetDirectoryName(
+                    Environment.ProcessPath ?? AppContext.BaseDirectory) ?? "";
+                bool runningFromInstall = string.Equals(current, installDir,
+                    StringComparison.OrdinalIgnoreCase);
+
+                LogSvc.Ok("Uninstall complete.");
+
+                if (runningFromInstall)
+                {
+                    // Schedule deletion of own folder and exit
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                        "cmd.exe", $"/c timeout /t 2 /nobreak >nul & rd /s /q \"{installDir}\"")
+                    { CreateNoWindow = true, UseShellExecute = false });
+                    Application.Current.Dispatcher.BeginInvoke(() =>
+                        ((App)Application.Current).ShutdownApp());
+                }
+            }
+            catch (Exception ex)
+            {
+                LogSvc.Warn($"Uninstall failed: {ex.Message}");
+                MessageBox.Show(Lang.T("UninstallFailed", ex.Message), Lang.T("UninstallTitle"),
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private string PickInstallFolder(string defaultParent)
+        {
+            string? finalResult = null;
+
+            var win = new Window
+            {
+                WindowStyle=WindowStyle.None, AllowsTransparency=true,
+                Background=System.Windows.Media.Brushes.Transparent,
+                Width=500, SizeToContent=SizeToContent.Height,
+                WindowStartupLocation=WindowStartupLocation.CenterOwner,
+                Owner=this, ResizeMode=ResizeMode.NoResize,
+            };
+            var border = new System.Windows.Controls.Border
+            {
+                Background=(System.Windows.Media.Brush)Application.Current.Resources["WindowBg"],
+                BorderBrush=(System.Windows.Media.Brush)Application.Current.Resources["BorderColor"],
+                BorderThickness=new Thickness(1),
+                CornerRadius=new System.Windows.CornerRadius(6),
+                Padding=new Thickness(20),
+            };
+            var panel = new System.Windows.Controls.StackPanel();
+
+            panel.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text=Lang.T("InstallTitle"), FontSize=12, FontWeight=FontWeights.Bold,
+                Foreground=(System.Windows.Media.Brush)Application.Current.Resources["TextPrimary"],
+                Margin=new Thickness(0,0,0,12),
+            });
+            panel.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text=Lang.T("InstallSelectFolder"), FontSize=10,
+                Foreground=(System.Windows.Media.Brush)Application.Current.Resources["TextMuted"],
+                Margin=new Thickness(0,0,0,4),
+            });
+
+            var folderRow = new System.Windows.Controls.Grid { Margin=new Thickness(0,0,0,8) };
+            folderRow.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+            folderRow.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width=GridLength.Auto });
+
+            var folderBox = new System.Windows.Controls.TextBox
+            {
+                Text=defaultParent,
+                FontFamily=(System.Windows.Media.FontFamily)Application.Current.Resources["Theme.FontFamily"],
+                FontSize=11,
+                Background=(System.Windows.Media.Brush)Application.Current.Resources["CardBg"],
+                Foreground=(System.Windows.Media.Brush)Application.Current.Resources["TextPrimary"],
+                BorderBrush=(System.Windows.Media.Brush)Application.Current.Resources["BorderColor"],
+                BorderThickness=new Thickness(1), Padding=new Thickness(6,4,6,4),
+                VerticalContentAlignment=VerticalAlignment.Center,
+            };
+            var browseBtn = new System.Windows.Controls.Button
+            {
+                Content="…", Style=(Style)Application.Current.Resources["FlatBtn"],
+                Padding=new Thickness(10,4,10,4), Margin=new Thickness(6,0,0,0),
+                VerticalAlignment=VerticalAlignment.Center,
+            };
+            System.Windows.Controls.Grid.SetColumn(folderBox,0);
+            System.Windows.Controls.Grid.SetColumn(browseBtn,1);
+            folderRow.Children.Add(folderBox); folderRow.Children.Add(browseBtn);
+            panel.Children.Add(folderRow);
+
+            panel.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text="Will install to:", FontSize=10,
+                Foreground=(System.Windows.Media.Brush)Application.Current.Resources["TextMuted"],
+                Margin=new Thickness(0,0,0,2),
+            });
+            var resolvedLabel = new System.Windows.Controls.TextBlock
+            {
+                FontFamily=(System.Windows.Media.FontFamily)Application.Current.Resources["Theme.FontFamily"],
+                FontSize=11, FontWeight=FontWeights.Bold,
+                Foreground=(System.Windows.Media.Brush)Application.Current.Resources["Accent"],
+                TextWrapping=TextWrapping.Wrap, Margin=new Thickness(0,0,0,16),
+            };
+
+            void UpdateResolved()
+            {
+                var parent = folderBox.Text.Trim();
+                resolvedLabel.Text = string.IsNullOrEmpty(parent) ? ""
+                    : System.IO.Path.GetFullPath(System.IO.Path.Combine(parent, InstallFolderName));
+            }
+            UpdateResolved();
+            folderBox.TextChanged += (_,_) => UpdateResolved();
+            panel.Children.Add(resolvedLabel);
+
+            browseBtn.Click += (_,_) =>
+            {
+                var dlg = new System.Windows.Forms.FolderBrowserDialog
+                {
+                    Description=Lang.T("InstallSelectFolder"),
+                    SelectedPath=folderBox.Text.Trim(),
+                    ShowNewFolderButton=true,
+                };
+                if (dlg.ShowDialog()==System.Windows.Forms.DialogResult.OK)
+                    folderBox.Text=dlg.SelectedPath;
+            };
+
+            var btns = new System.Windows.Controls.StackPanel
+            {
+                Orientation=System.Windows.Controls.Orientation.Horizontal,
+                HorizontalAlignment=HorizontalAlignment.Right,
+            };
+            var btnCancel  = new System.Windows.Controls.Button { Content=Lang.T("BtnCancel"),  Style=(Style)Application.Current.Resources["FlatBtn"],    Padding=new Thickness(14,6,14,6), Margin=new Thickness(0,0,8,0) };
+            var btnInstall = new System.Windows.Controls.Button { Content=Lang.T("BtnInstall"), Style=(Style)Application.Current.Resources["SuccessBtn"], Padding=new Thickness(14,6,14,6) };
+            btnCancel.Click  += (_,_) => { finalResult=null; win.Close(); };
+            btnInstall.Click += (_,_) =>
+            {
+                var parent = folderBox.Text.Trim();
+                if (string.IsNullOrEmpty(parent)) { resolvedLabel.Text="Please select a folder."; return; }
+                finalResult = System.IO.Path.GetFullPath(System.IO.Path.Combine(parent, InstallFolderName));
+                // Save chosen path to config immediately
+                ConfigSvc.Config.InstalledPath = finalResult;
+                ConfigSvc.Save();
+                win.Close();
+            };
+            btns.Children.Add(btnCancel); btns.Children.Add(btnInstall);
+            panel.Children.Add(btns);
+            border.Child=panel; win.Content=border;
+            win.ShowDialog();
+            return finalResult ?? "";
+        }
+
+        private static void CopyDirRecursive(string src, string dst)
+        {
+            foreach (var dir in System.IO.Directory.GetDirectories(src))
+            {
+                var name = System.IO.Path.GetFileName(dir);
+                var dest = System.IO.Path.Combine(dst, name);
+                System.IO.Directory.CreateDirectory(dest);
+                foreach (var f in System.IO.Directory.GetFiles(dir))
+                    System.IO.File.Copy(f, System.IO.Path.Combine(dest,
+                        System.IO.Path.GetFileName(f)), overwrite: true);
+                CopyDirRecursive(dir, dest);
+            }
+        }
+
+        public bool GetStartWithWindows()
+        {
+            // Check if our scheduled task exists
+            try
+            {
+                var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                    "schtasks.exe", "/query /tn \"MasselGUARD\"")
+                    { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true });
+                p?.WaitForExit(2000);
+                return p?.ExitCode == 0;
+            }
+            catch { return false; }
+        }
+
+        public void SetStartWithWindows(bool enable)
+        {
+            if (enable)
+            {
+                var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                RunPS($@"$a=New-ScheduledTaskAction -Execute '{exe}';$t=New-ScheduledTaskTrigger -AtLogOn;$p=New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest;Register-ScheduledTask -TaskName 'MasselGUARD' -Action $a -Trigger $t -Principal $p -Force");
+            }
+            else
+            {
+                RunPS("Unregister-ScheduledTask -TaskName 'MasselGUARD' -Confirm:$false -ErrorAction SilentlyContinue");
+            }
+            ConfigSvc.Config.StartWithWindows = enable;
+            ConfigSvc.Save();
+        }
+
+        private static bool RunPS(string script)
+        {
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe",
+                    $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"{script.Replace("\"", "\\\"")}\"")
+                { UseShellExecute = false, CreateNoWindow = true };
+                using var p = System.Diagnostics.Process.Start(psi)!;
+                p.WaitForExit(30000);
+                return p.ExitCode == 0;
+            }
+            catch { return false; }
+        }
+        public string? GetInstalledPath()
+        {
+            // Primary: config.json InstalledPath (stored as directory)
+            var dir = ConfigSvc.Config.InstalledPath;
+            if (!string.IsNullOrEmpty(dir))
+            {
+                var exe = System.IO.Path.Combine(dir, "MasselGUARD.exe");
+                if (System.IO.File.Exists(exe)) return dir;
+            }
+
+            // Fallback: registry written during install
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine
+                    .OpenSubKey(InstallRegKey);
+                if (key?.GetValue("InstallPath") is string regDir &&
+                    System.IO.File.Exists(System.IO.Path.Combine(regDir, "MasselGUARD.exe")))
+                {
+                    // Sync back to config
+                    ConfigSvc.Config.InstalledPath = regDir;
+                    ConfigSvc.Save();
+                    return regDir;
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        public bool IsRunningPortableWhileInstalled()
+        {
+            var installed = GetInstalledPath();
+            if (installed == null) return false;
+            return !installed.Equals(Environment.ProcessPath,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        public void RunUpdate()
+        {
+            var installed = GetInstalledPath();
+            if (installed == null) return;
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                    installed) { UseShellExecute = true });
+                Application.Current.Shutdown();
+            }
+            catch (Exception ex) { LogSvc.Warn($"Update failed: {ex.Message}"); }
+        }
+
+        public (MessageBoxResult result, bool suppress) ShowUpdatePrompt(string msg, string title)
+        {
+            // Simple implementation — SettingsWindow has the suppress checkbox
+            var res = MessageBox.Show(msg, title, MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            return (res, false);
+        }
+
+        // ── WireGuard install dir detection ───────────────────────────────────
+        public static string? DetectWireGuardInstallDir()
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine
+                    .OpenSubKey(@"SOFTWARE\WireGuard");
+                if (key?.GetValue("InstallDirectory") is string d &&
+                    System.IO.Directory.Exists(d)) return d.TrimEnd('\\', '/');
+            }
+            catch { }
+            var def = @"C:\Program Files\WireGuard";
+            return System.IO.File.Exists(System.IO.Path.Combine(def, "wireguard.exe"))
+                ? def : null;
+        }
+
+        public static string? FindWireGuardExe()
+        {
+            var dir = DetectWireGuardInstallDir();
+            if (dir != null)
+            {
+                var p = System.IO.Path.Combine(dir, "wireguard.exe");
+                if (System.IO.File.Exists(p)) return p;
+            }
+            return null;
+        }
     }
 }

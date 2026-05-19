@@ -5,6 +5,8 @@ using System.Diagnostics;
 using System.Threading;
 using System.Windows;
 using WinForms = System.Windows.Forms;
+using MasselGUARD.Models;
+using MasselGUARD.Services;
 
 namespace MasselGUARD
 {
@@ -39,11 +41,31 @@ namespace MasselGUARD
         {
             base.OnStartup(e);
 
-            // ── 1. Load language immediately — needed by all dialogs below ───
-            Lang.Instance.Load(AppConfig.LoadLanguage());
+            // Global exception handler — show error instead of silent crash
+            DispatcherUnhandledException += (_, ex) =>
+            {
+                System.Windows.MessageBox.Show(
+                    $"Unhandled error:\n\n{ex.Exception.GetType().Name}: {ex.Exception.Message}\n\n{ex.Exception.StackTrace?.Split('\n').FirstOrDefault()}",
+                    "MasselGUARD — Unexpected Error",
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Error);
+                ex.Handled = true;
+            };
 
-            // ── 1b. Bootstrap theme ───────────────────────────────────────────
-            ThemeManager.Instance.Load(AppConfig.LoadTheme());
+            // ── 1. Load language immediately — needed by all dialogs below ───
+            // ── 1. Load language and theme from persisted config ──────────────
+            {
+                var bootCfg = new Services.ConfigService();
+                bootCfg.Load();
+                // Use explicit load with fallback to ensure lang files are found
+                string langCode = bootCfg.Config.Language ?? "en";
+                var langFile = System.IO.Path.Combine(AppContext.BaseDirectory, "lang", langCode + ".json");
+                if (!System.IO.File.Exists(langFile))
+                    langFile = System.IO.Path.Combine(AppContext.BaseDirectory, "lang", "en.json");
+                if (System.IO.File.Exists(langFile))
+                    Lang.Instance.Load(langCode);
+                ThemeManager.Instance.Load(bootCfg.Config.ActiveTheme ?? "default-dark");
+            }
             ThemeManager.Instance.ThemeChanged += OnThemeChanged;
 
             // ── 1c. System theme auto-switch polling ─────────────────────────
@@ -128,29 +150,125 @@ namespace MasselGUARD
 
             _trayMenu = new WinForms.ContextMenuStrip();
             ApplyTrayMenuTheme();
-            _trayMenu.ShowImageMargin = true;
+            _trayMenu.ShowImageMargin = false;
             _trayMenu.ShowCheckMargin = false;
             _trayMenu.Renderer = new DarkMenuRenderer();
 
             var showItem = new WinForms.ToolStripMenuItem(Lang.T("TrayShowWindow"));
-            showItem.Font = new System.Drawing.Font("Consolas", 9f, System.Drawing.FontStyle.Bold);
+            showItem.Font   = new System.Drawing.Font("Segoe UI", 9f, System.Drawing.FontStyle.Bold);
+            showItem.Image  = DrawMenuIcon(MenuIconKind.Window);
             showItem.Click += (_, _) => ShowMainWindow();
             _trayMenu.Items.Add(showItem);
             _trayMenu.Items.Add(new WinForms.ToolStripSeparator());
 
             // Tunnel submenu placeholder — rebuilt by RebuildTrayTunnelMenu
             _tunnelMenuHeader = new WinForms.ToolStripMenuItem(Lang.T("TrayTunnels"));
-            _tunnelMenuHeader.Font = new System.Drawing.Font("Consolas", 9f, System.Drawing.FontStyle.Bold);
+            _tunnelMenuHeader.Font  = new System.Drawing.Font("Segoe UI", 9f, System.Drawing.FontStyle.Bold);
+            _tunnelMenuHeader.Image = DrawMenuIcon(MenuIconKind.ShieldOff);
             _trayMenu.Items.Add(_tunnelMenuHeader);
             _trayMenu.Items.Add(new WinForms.ToolStripSeparator());
 
             var exitItem = new WinForms.ToolStripMenuItem(Lang.T("TrayExit"));
-            exitItem.Font = new System.Drawing.Font("Consolas", 9f);
+            exitItem.Font  = new System.Drawing.Font("Segoe UI", 9f);
+            exitItem.Image = DrawMenuIcon(MenuIconKind.Exit);
             exitItem.Click += (_, _) => { _trayIcon!.Visible = false; Shutdown(); };
             _trayMenu.Items.Add(exitItem);
 
             _trayIcon.ContextMenuStrip = _trayMenu;
             _trayIcon.DoubleClick += (_, _) => ShowMainWindow();
+        }
+
+        private enum MenuIconKind { ShieldOff, ShieldOn, Window, Exit }
+
+        private static System.Drawing.Bitmap DrawMenuIcon(MenuIconKind kind)
+        {
+            const int S = 16;
+            var bmp = new System.Drawing.Bitmap(S, S,
+                System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using var g = System.Drawing.Graphics.FromImage(bmp);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.Clear(System.Drawing.Color.Transparent);
+
+            System.Drawing.Color Res(string key, System.Drawing.Color fb)
+            {
+                var v = System.Windows.Application.Current?.Resources[key];
+                if (v is System.Windows.Media.Color mc)
+                    return System.Drawing.Color.FromArgb(mc.A, mc.R, mc.G, mc.B);
+                if (v is System.Windows.Media.SolidColorBrush scb)
+                    return System.Drawing.Color.FromArgb(
+                        scb.Color.A, scb.Color.R, scb.Color.G, scb.Color.B);
+                return fb;
+            }
+
+            float X(float x) => x * S / 16f;
+            float Y(float y) => y * S / 16f;
+
+            switch (kind)
+            {
+                case MenuIconKind.ShieldOff:
+                case MenuIconKind.ShieldOn:
+                {
+                    var fill = kind == MenuIconKind.ShieldOn
+                        ? Res("Success",    System.Drawing.Color.FromArgb(34,197,94))
+                        : Res("BorderColor",System.Drawing.Color.FromArgb(71,85,105));
+                    var shield = new System.Drawing.Drawing2D.GraphicsPath();
+                    shield.AddLine(X(8),Y(1), X(14),Y(3.5f));
+                    shield.AddLine(X(14),Y(3.5f), X(14),Y(9));
+                    shield.AddBezier(X(14),Y(9), X(14),Y(13), X(11),Y(15), X(8),Y(16));
+                    shield.AddBezier(X(8),Y(16), X(5),Y(15), X(2),Y(13), X(2),Y(9));
+                    shield.AddLine(X(2),Y(9), X(2),Y(3.5f));
+                    shield.CloseFigure();
+                    using (var b = new System.Drawing.SolidBrush(fill)) g.FillPath(b, shield);
+                    if (kind == MenuIconKind.ShieldOn)
+                    {
+                        using var p = new System.Drawing.Pen(System.Drawing.Color.White, X(1.8f))
+                            { StartCap = System.Drawing.Drawing2D.LineCap.Round,
+                              EndCap   = System.Drawing.Drawing2D.LineCap.Round,
+                              LineJoin = System.Drawing.Drawing2D.LineJoin.Round };
+                        g.DrawLines(p, new[] {
+                            new System.Drawing.PointF(X(5),Y(8.5f)),
+                            new System.Drawing.PointF(X(7.5f),Y(11.5f)),
+                            new System.Drawing.PointF(X(11.5f),Y(6)) });
+                    }
+                    shield.Dispose();
+                    break;
+                }
+                case MenuIconKind.Window:
+                {
+                    var col  = Res("Accent", System.Drawing.Color.FromArgb(96,165,250));
+                    var col2 = Res("TextMuted", System.Drawing.Color.FromArgb(100,116,139));
+                    // Window frame
+                    using var pen = new System.Drawing.Pen(col, 1.2f);
+                    g.DrawRectangle(pen, X(1.5f), Y(1.5f), X(13), Y(13));
+                    // Title bar
+                    using var tb = new System.Drawing.SolidBrush(col);
+                    g.FillRectangle(tb, X(1.5f), Y(1.5f), X(13), Y(3.5f));
+                    // Three dots
+                    using var dot = new System.Drawing.SolidBrush(System.Drawing.Color.White);
+                    g.FillEllipse(dot, X(3), Y(2.2f), X(1.4f), Y(1.4f));
+                    g.FillEllipse(dot, X(5.2f), Y(2.2f), X(1.4f), Y(1.4f));
+                    g.FillEllipse(dot, X(7.4f), Y(2.2f), X(1.4f), Y(1.4f));
+                    break;
+                }
+                case MenuIconKind.Exit:
+                {
+                    var col = Res("ErrorColor", System.Drawing.Color.FromArgb(247,129,102));
+                    using var pen = new System.Drawing.Pen(col, 1.5f)
+                        { StartCap = System.Drawing.Drawing2D.LineCap.Round,
+                          EndCap   = System.Drawing.Drawing2D.LineCap.Round };
+                    // Arrow pointing right out of a box
+                    g.DrawLine(pen, X(7), Y(3), X(7), Y(13));
+                    g.DrawLine(pen, X(2), Y(3), X(7), Y(3));
+                    g.DrawLine(pen, X(2), Y(13), X(7), Y(13));
+                    g.DrawLine(pen, X(2), Y(3), X(2), Y(13));
+                    // Arrow
+                    g.DrawLine(pen, X(9), Y(8), X(14), Y(8));
+                    g.DrawLine(pen, X(11.5f), Y(5.5f), X(14), Y(8));
+                    g.DrawLine(pen, X(11.5f), Y(10.5f), X(14), Y(8));
+                    break;
+                }
+            }
+            return bmp;
         }
 
         public void ShutdownApp()
@@ -167,12 +285,61 @@ namespace MasselGUARD
             _mainWindow.Activate();
         }
 
+        private Views.ToastWindow? _activeToast;
+        private string _lastToastKey = "";
+
+        public void ShowTrayNotification(Views.ToastNotification n)
+        {
+            // Deduplicate: ignore identical notification fired within 1 second
+            string key = $"{n.Category}|{n.Primary}|{n.Secondary}";
+            if (key == _lastToastKey) return;
+            _lastToastKey = key;
+            var resetTimer = new System.Windows.Threading.DispatcherTimer
+                { Interval = TimeSpan.FromSeconds(1) };
+            resetTimer.Tick += (_, _) => { _lastToastKey = ""; resetTimer.Stop(); };
+            resetTimer.Start();
+
+            Dispatcher.Invoke(() =>
+            {
+                try
+                {
+                    if (_activeToast != null)
+                    {
+                        try { _activeToast.Close(); } catch { }
+                        _activeToast = null;
+                    }
+                    var toast = new Views.ToastWindow(n);
+                    _activeToast = toast;
+                    toast.Closed += (_, _) =>
+                    {
+                        if (_activeToast == toast) _activeToast = null;
+                    };
+                    toast.Show();
+                }
+                catch { }
+            });
+        }
+
+        // Convenience overload for plain text (legacy callers)
+        public void ShowTrayNotification(string title, string body, int durationMs = 5000)
+            => ShowTrayNotification(new Views.ToastNotification
+            {
+                Category  = title,
+                Primary   = body,
+                DurationMs = durationMs,
+            });
+
         public void UpdateTrayStatus(string tunnelName, int activeCount)
         {
             if (_trayIcon == null) return;
             var appName = ThemeManager.Instance.Current.AppName;
             _trayIcon.Text = activeCount > 0 ? Lang.T("TrayActive", tunnelName) : appName;
             _trayIcon.Icon = GetTrayIcon(activeCount);
+
+            // Update tunnel header shield to reflect active state
+            if (_tunnelMenuHeader != null)
+                _tunnelMenuHeader.Image = DrawMenuIcon(
+                    activeCount > 0 ? MenuIconKind.ShieldOn : MenuIconKind.ShieldOff);
         }
 
         private static System.Drawing.Icon GetTrayIcon(int activeCount)
@@ -227,8 +394,8 @@ namespace MasselGUARD
                 if (_mainWindow is MainWindow mw)
                     mw.Dispatcher.Invoke(() =>
                     {
-                        foreach (var t in active.ToList()) mw.ManualStop(t);
-                        mw.UpdateStatusDisplay();
+                        foreach (var t in active.ToList()) mw.TunnelSvc.Disconnect(mw.ConfigSvc.Config.Tunnels.FirstOrDefault(x=>x.Name==t) ?? new Models.StoredTunnel{Name=t,Source="local"});
+                        mw._vm.RefreshTunnelStatus();
                     });
             };
             _tunnelMenuHeader.DropDownItems.Add(disconnectAll);
@@ -262,9 +429,9 @@ namespace MasselGUARD
                     if (_mainWindow is MainWindow mw)
                         mw.Dispatcher.Invoke(() =>
                         {
-                            if (a2) mw.ManualStop(t2);
-                            else    mw.ManualStart(t2);
-                            mw.UpdateStatusDisplay();
+                            var st2 = mw.ConfigSvc.Config.Tunnels.FirstOrDefault(x=>x.Name==t2) ?? new Models.StoredTunnel{Name=t2,Source="local"};
+                            if (a2) mw.TunnelSvc.Disconnect(st2); else mw.TunnelSvc.Connect(st2, mw.ConfigSvc.Config);
+                            mw._vm.RefreshTunnelStatus();
                         });
                 };
                 _tunnelMenuHeader.DropDownItems.Add(item);
@@ -461,7 +628,6 @@ namespace MasselGUARD
 
             win.ShowDialog();
         }
-    }
 
     internal static class TrayIconHelper
     {
@@ -552,71 +718,93 @@ namespace MasselGUARD
             float X(float x) => x * sc;
             float Y(float y) => y * sc;
 
-            // ── Shield: M12,1 L22,5 L22,13 C22,18.5 17.5,22.5 12,24 C6.5,22.5 2,18.5 2,13 L2,5 Z
-            var shield = new System.Drawing.Drawing2D.GraphicsPath();
-            shield.AddLine   (X(12),Y(1),   X(22),Y(5));
-            shield.AddLine   (X(22),Y(5),   X(22),Y(13));
-            shield.AddBezier (X(22),Y(13),  X(22),Y(18.5f), X(17.5f),Y(22.5f), X(12),Y(24));
-            shield.AddBezier (X(12),Y(24),  X(6.5f),Y(22.5f), X(2),Y(18.5f),  X(2), Y(13));
-            shield.AddLine   (X(2), Y(13),  X(2), Y(5));
-            shield.CloseFigure();
-
-            using (var fill = new System.Drawing.SolidBrush(ColShield))
-                g.FillPath(fill, shield);
-            using (var rim = new System.Drawing.Pen(ColRim, X(0.5f)))
-                g.DrawPath(rim, shield);
-            shield.Dispose();
-
-            // ── Chevron: colour = green when any active, blue when idle
-            var wc = activeCount > 0 ? ColGreen : ColAccent;
-            using var pen = new System.Drawing.Pen(wc, X(2.2f))
+            // Read theme colours — Accent (idle), Success (active), TextMuted (idle rim)
+            // WPF resources are Colors; convert to System.Drawing.Color
+            System.Drawing.Color ToDrawing(string key, System.Drawing.Color fallback)
             {
-                StartCap  = System.Drawing.Drawing2D.LineCap.Round,
-                EndCap    = System.Drawing.Drawing2D.LineCap.Round,
-                LineJoin  = System.Drawing.Drawing2D.LineJoin.Round
-            };
-            var chevron = new System.Drawing.PointF[]
-            {
-                new(X(7),  Y(9)),
-                new(X(12), Y(15)),
-                new(X(17), Y(9))
-            };
-            g.DrawLines(pen, chevron);
-
-            // ── Badge counter (bottom-right) — shown when activeCount >= 1
-            if (activeCount > 0)
-            {
-                string label = activeCount > 9 ? "9+" : activeCount.ToString();
-
-                // Badge circle: sits in the bottom-right quadrant
-                float bR   = X(5.6f);                        // radius
-                float bCx  = X(24) - bR - X(0.4f);           // centre X (near right edge)
-                float bCy  = Y(24) - bR - Y(0.4f);           // centre Y (near bottom edge)
-
-                // Dark outline ring so badge reads on any background
-                using (var outline = new System.Drawing.SolidBrush(C(0, 0, 0, 200)))
-                    g.FillEllipse(outline, bCx - bR - X(0.8f), bCy - bR - X(0.8f),
-                                           (bR + X(0.8f)) * 2, (bR + X(0.8f)) * 2);
-
-                // Green fill
-                using (var fill = new System.Drawing.SolidBrush(ColGreen))
-                    g.FillEllipse(fill, bCx - bR, bCy - bR, bR * 2, bR * 2);
-
-                // Number
-                float fontSize = label.Length == 1 ? X(5.8f) : X(4.6f);
-                using var font = new System.Drawing.Font("Segoe UI", fontSize,
-                    System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Pixel);
-                using var whiteBrush = new System.Drawing.SolidBrush(System.Drawing.Color.White);
-                var sf = new System.Drawing.StringFormat
+                try
                 {
-                    Alignment     = System.Drawing.StringAlignment.Center,
-                    LineAlignment = System.Drawing.StringAlignment.Center
-                };
-                g.DrawString(label, font, whiteBrush,
-                    new System.Drawing.RectangleF(bCx - bR, bCy - bR, bR * 2, bR * 2), sf);
+                    var res = System.Windows.Application.Current?.Resources[key];
+                    if (res is System.Windows.Media.Color mc)
+                        return System.Drawing.Color.FromArgb(mc.A, mc.R, mc.G, mc.B);
+                    if (res is System.Windows.Media.SolidColorBrush scb)
+                        return System.Drawing.Color.FromArgb(
+                            scb.Color.A, scb.Color.R, scb.Color.G, scb.Color.B);
+                }
+                catch { }
+                return fallback;
             }
 
+            bool active = activeCount > 0;
+
+            // Colours
+            var colActive   = ToDrawing("Success",    System.Drawing.Color.FromArgb( 34, 197,  94));  // green when active
+            var colIdleFill = ToDrawing("CardBg",     System.Drawing.Color.FromArgb( 22,  27,  34));  // dark fill when idle
+            var colIdleRim  = ToDrawing("BorderColor",System.Drawing.Color.FromArgb( 48,  54,  61));  // muted rim when idle
+            var colChevron  = ToDrawing("Accent",     System.Drawing.Color.FromArgb( 88, 166, 255));  // accent chevron when idle
+
+            // ── Shield path ─────────────────────────────────────────────────
+            var shield = new System.Drawing.Drawing2D.GraphicsPath();
+            shield.AddLine   (X(12), Y(1),    X(22), Y(5));
+            shield.AddLine   (X(22), Y(5),    X(22), Y(13));
+            shield.AddBezier (X(22), Y(13),   X(22), Y(18.5f), X(17.5f), Y(22.5f), X(12), Y(24));
+            shield.AddBezier (X(12), Y(24),   X(6.5f), Y(22.5f), X(2), Y(18.5f),  X(2),  Y(13));
+            shield.AddLine   (X(2),  Y(13),   X(2),  Y(5));
+            shield.CloseFigure();
+
+            if (active)
+            {
+                // ── ACTIVE: filled green shield, white chevron ────────────────
+                using var fill = new System.Drawing.SolidBrush(colActive);
+                g.FillPath(fill, shield);
+
+                // Subtle darker inner rim
+                using var rim = new System.Drawing.Pen(
+                    System.Drawing.Color.FromArgb(80, 0, 0, 0), X(0.8f));
+                g.DrawPath(rim, shield);
+
+                // White chevron (check-style) — sits inside the shield
+                using var pen = new System.Drawing.Pen(System.Drawing.Color.White, X(2.2f))
+                {
+                    StartCap = System.Drawing.Drawing2D.LineCap.Round,
+                    EndCap   = System.Drawing.Drawing2D.LineCap.Round,
+                    LineJoin = System.Drawing.Drawing2D.LineJoin.Round,
+                };
+                var chevron = new System.Drawing.PointF[]
+                {
+                    new(X(7.5f), Y(12)),
+                    new(X(11),   Y(16)),
+                    new(X(17),   Y(9)),
+                };
+                g.DrawLines(pen, chevron);
+            }
+            else
+            {
+                // ── IDLE: dark fill, muted rim, accent chevron ────────────────
+                using (var fill = new System.Drawing.SolidBrush(colIdleFill))
+                    g.FillPath(fill, shield);
+                using (var rim = new System.Drawing.Pen(colIdleRim, X(1.2f)))
+                    g.DrawPath(rim, shield);
+
+                // Downward-pointing accent chevron
+                using var pen = new System.Drawing.Pen(colChevron, X(2.0f))
+                {
+                    StartCap = System.Drawing.Drawing2D.LineCap.Round,
+                    EndCap   = System.Drawing.Drawing2D.LineCap.Round,
+                    LineJoin = System.Drawing.Drawing2D.LineJoin.Round,
+                };
+                var chevron = new System.Drawing.PointF[]
+                {
+                    new(X(7.5f), Y(9.5f)),
+                    new(X(12),   Y(15)),
+                    new(X(16.5f),Y(9.5f)),
+                };
+                g.DrawLines(pen, chevron);
+            }
+
+            shield.Dispose();
             return bmp;
+        }
         }
     }
 

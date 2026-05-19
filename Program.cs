@@ -13,6 +13,24 @@ namespace MasselGUARD
         [STAThread]
         public static int Main(string[] args)
         {
+            // ── Early UAC bypass for managed installs ─────────────────────────
+            // If a scheduled task 'MasselGUARD' exists and we're NOT already
+            // elevated, relaunch via the task (which runs at RunLevel=Highest
+            // without a UAC prompt). This only applies to managed installs.
+            if (!IsElevated() && ScheduledTaskExists("MasselGUARD"))
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo("schtasks.exe",
+                        "/run /tn MasselGUARD /i")
+                    {
+                        CreateNoWindow  = true,
+                        UseShellExecute = false,
+                    });
+                    return 0; // exit this non-elevated instance
+                }
+                catch { /* fall through to normal launch */ }
+            }
             // Resolve exe dir via MainModule.FileName — same approach as working
             // WireGuardClient. Environment.ProcessPath is unreliable in some
             // self-contained publish configurations.
@@ -44,6 +62,35 @@ namespace MasselGUARD
             app.InitializeComponent();
             app.Run();
             return 0;
+        }
+        private static bool IsElevated()
+        {
+            try
+            {
+                var id = System.Security.Principal.WindowsIdentity.GetCurrent();
+                var p  = new System.Security.Principal.WindowsPrincipal(id);
+                return p.IsInRole(
+                    System.Security.Principal.WindowsBuiltInRole.Administrator);
+            }
+            catch { return false; }
+        }
+
+        private static bool ScheduledTaskExists(string taskName)
+        {
+            try
+            {
+                using var proc = Process.Start(new ProcessStartInfo(
+                    "schtasks.exe", $"/query /tn \"{taskName}\"")
+                {
+                    CreateNoWindow         = true,
+                    UseShellExecute        = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError  = true,
+                });
+                proc?.WaitForExit(3000);
+                return proc?.ExitCode == 0;
+            }
+            catch { return false; }
         }
     }
 }

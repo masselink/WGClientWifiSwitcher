@@ -2,8 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:MasselGUARD"
-        Title="{Binding [RuleDialogAddTitle], Source={x:Static local:Lang.Instance}}"
-        Height="240" Width="420"
+        Height="300" Width="440"
         ResizeMode="NoResize"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -32,39 +31,40 @@
             </Border>
 
             <!-- Fields -->
-            <Grid Grid.Row="1" Margin="20,14,20,0">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="14"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
+            <StackPanel Grid.Row="1" Margin="20,14,20,0">
 
-                <TextBlock Grid.Row="0" Grid.ColumnSpan="2"
-                           Text="{Binding [RuleDialogSsidLabel], Source={x:Static local:Lang.Instance}}"
+                <!-- Name -->
+                <TextBlock Text="{Binding [RuleDialogNameLabel], Source={x:Static local:Lang.Instance}}"
                            FontSize="10" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,4"/>
-                <TextBox Grid.Row="1" Grid.Column="0" x:Name="SsidBox" Margin="0,0,8,0"/>
-                <Button  Grid.Row="1" Grid.Column="1"
-                         Content="{Binding [BtnUseCurrent], Source={x:Static local:Lang.Instance}}"
-                         Style="{StaticResource FlatBtn}"
-                         FontSize="10" Padding="10,6" Click="UseCurrent_Click"/>
+                <TextBox x:Name="NameBox" Margin="0,0,0,12"
+                         TextChanged="NameBox_TextChanged"/>
 
-                <TextBlock Grid.Row="3" Grid.ColumnSpan="2"
-                           Text="{Binding [RuleDialogTunnelLabel], Source={x:Static local:Lang.Instance}}"
+                <!-- SSID -->
+                <TextBlock Text="{Binding [RuleDialogSsidLabel], Source={x:Static local:Lang.Instance}}"
                            FontSize="10" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,4"/>
-                <ComboBox Grid.Row="4" Grid.ColumnSpan="2" x:Name="TunnelBox" IsEditable="True"/>
+                <Grid Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0" x:Name="SsidBox" Margin="0,0,8,0"
+                             TextChanged="SsidBox_TextChanged"/>
+                    <Button Grid.Column="1"
+                            Content="{Binding [BtnUseCurrent], Source={x:Static local:Lang.Instance}}"
+                            Style="{StaticResource FlatBtn}"
+                            FontSize="10" Padding="10,6" Click="UseCurrent_Click"/>
+                </Grid>
 
-                <TextBlock Grid.Row="5" Grid.ColumnSpan="2"
-                           Text="{Binding [RuleDialogTunnelHint], Source={x:Static local:Lang.Instance}}"
+                <!-- Tunnel -->
+                <TextBlock Text="{Binding [RuleDialogTunnelLabel], Source={x:Static local:Lang.Instance}}"
+                           FontSize="10" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,4"/>
+                <ComboBox x:Name="TunnelBox" IsEditable="True" Margin="0,0,0,6"
+                          SelectionChanged="TunnelBox_Changed"/>
+
+                <TextBlock Text="{Binding [RuleDialogTunnelHint], Source={x:Static local:Lang.Instance}}"
                            FontSize="9" Foreground="{DynamicResource TextMuted}"
-                           Margin="0,5,0,0" TextWrapping="Wrap"/>
-            </Grid>
+                           TextWrapping="Wrap"/>
+            </StackPanel>
 
             <!-- Buttons -->
             <Border Grid.Row="2" Background="{DynamicResource WindowBg}" CornerRadius="{DynamicResource Theme.CornerRadiusBottom}">

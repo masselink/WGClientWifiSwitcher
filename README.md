@@ -2,77 +2,60 @@
 
 **Automated WireGuard tunnel management for Windows**
 
-MasselGUARD sits in the system tray and watches your WiFi connection. When you connect to a known network it activates the right WireGuard tunnel automatically. When you leave, or land on an unknown network, a configurable default action fires — disconnect all tunnels, switch to a fallback, or do nothing. It also works as a pure manual client when automation is not wanted.
+MasselGUARD sits in the system tray and watches your WiFi connection. When you join a known network it activates the right WireGuard tunnel automatically. When you leave, or land on an unknown network, a configurable fallback fires. It also works as a clean manual WireGuard front-end.
 
-> **How it works** → [`docs/MasselGUARD.md`](docs/MasselGUARD.md)  
-> **Release history** → [`docs/RELEASE_NOTES.md`](docs/RELEASE_NOTES.md)  
 > **User manual** → [`docs/MANUAL.md`](docs/MANUAL.md)
-
----
-
-## The idea
-
-Most WireGuard users end up with the same problem: they have several tunnel profiles for different contexts — a home router, an office gateway, a travel VPN — and they keep forgetting to switch. MasselGUARD solves this by tying tunnel selection to the WiFi network you are on. You configure the rules once; from then on the right tunnel is active automatically.
-
-For users who do not want automation, MasselGUARD is also a clean WireGuard front-end: a compact tunnel list, one-click connect and disconnect, and a tray icon that shows at a glance whether anything is active — including a badge counter showing the number of active tunnels.
+> **Technical reference** → [`docs/MasselGUARD.md`](docs/MasselGUARD.md)
+> **Change history v2.5→v2.9** → [`docs/CHANGES_v250_to_v290.md`](docs/CHANGES_v250_to_v290.md)
+> **Change history v2.3→v2.5** → [`docs/CHANGES_v231_to_v250.md`](docs/CHANGES_v231_to_v250.md)
 
 ---
 
 ## Operating modes
 
-**Standalone** — No WireGuard app required. MasselGUARD manages tunnels entirely using `tunnel.dll` and `wireguard.dll` (wireguard-NT). Tunnel configs are created and edited inside the app, encrypted with DPAPI, and stored locally.
-
-**Companion** — Works alongside the official WireGuard for Windows application. MasselGUARD automates connecting and disconnecting existing WireGuard profiles based on network rules without touching any config files.
-
-**Mixed** — Both modes active simultaneously — manage standalone local tunnels and automate WireGuard profiles side by side.
+| Mode | When to use |
+|---|---|
+| **Standalone** | MasselGUARD manages tunnels via `tunnel.dll` + `wireguard.dll`. No WireGuard app needed. |
+| **Companion** | Automates the official WireGuard for Windows app. |
+| **Mixed** | Both at once — local tunnels and WireGuard profiles side by side. |
 
 ---
 
 ## Features
 
 ### Automation
-| | |
-|---|---|
-| **WiFi rules** | Map any SSID to any tunnel. Leave the tunnel field empty to disconnect on that network. |
-| **Default action** | Do nothing / disconnect all / activate a named fallback when no rule matches. |
-| **Open network protection** | Automatically activates a chosen tunnel on open (passwordless) WiFi — before rules are evaluated. |
-| **Disable WiFi rules** | Disable all network-based automation; control tunnels by hand. |
+- **WiFi rules** — map any SSID to any tunnel (or disconnect). Each rule has a **Name**, **SSID**, **Hits counter**, and target tunnel
+- WiFi Rules panel: drag-to-reorder, hits counter, click-to-highlight matching rules in tunnel list
+- Rules column in tunnel list updates immediately on add/edit/delete
+- **Default action** — do nothing / disconnect / activate a fallback when no rule matches
+- **Open network protection** — force a tunnel on passwordless WiFi before any rule fires
+- **Defaults button** in toolbar — set/clear both roles from a single popup centred on the window
+- Rules fire exactly once per network switch (double-fire prevention)
 
 ### Tunnel management
-| | |
-|---|---|
-| **Tunnel groups** | Organise tunnels into named categories (Work, Personal, Travel, …). Switch between them via tabs. Uncategorized always available. |
-| **Pre/post scripts** | Run a `.bat` or `.ps1` before/after connect and before/after disconnect. Per tunnel. Can be stored as a file path or embedded inline. |
-| **Quick Connect** | Open any `.conf` or `.conf.dpapi` from disk and connect instantly without importing. |
-| **Import** | Import a `.conf` file (Standalone) or link an existing WireGuard profile (Companion). |
-| **Notes** | Add notes to any tunnel — shown as a tooltip. |
+- Live tunnel list — Connect/Disconnect per entry, real-time uptime
+- **⚡ / 🔓 badges** inline after tunnel name for default action and open protection
+- **Rules column** — count of WiFi rules per tunnel; click to highlight them
+- **Tunnel Groups** — colour-coded tabs, drag tunnels between groups by dropping on tab buttons, hide/show, default group, hide empty groups
+- **Drag-to-reorder** tunnels and WiFi rules
+- Quick Connect — connect any `.conf` from disk without importing
+- Pre/post scripts at four hook points per tunnel
 
 ### Interface
-| | |
-|---|---|
-| **Two-panel layout** | Left: tunnel list with category tabs. Right: Activity Log with Export. |
-| **System tray** | Badge counter when tunnels are active. Tunnel toggle from tray menu. |
-| **Tray toast** | Branded popup near the tray on auto-switch. Toggle in Settings → Appearance. |
-| **Activity log** | Timestamped log of all events. Normal and Extended verbosity. Export to `.txt`. |
-
-### Themes
-| | |
-|---|---|
-| **Built-in themes** | Default Dark, Default Light, Grey Dark, Grey Light, High Contrast Dark, High Contrast Light. |
-| **Custom themes** | Drop a `theme.json` folder next to the exe. Full colour, corner radius, font, window opacity, custom logo, tray colours, log timestamp colour. |
-| **Auto-switching** | Follows Windows dark/light system preference. |
-| **Hot-swap** | Themes apply instantly without restart. |
+- **Defaults button** — toolbar button opens a centred popup to set/clear default action and open network protection
+- Two-panel layout: tunnel list + optional WiFi Rules panel (left) | Activity Log (right)
+- Activity Log: **Time** | **Event** column header
+- Footer bar: mode (green when installed) | ⚡ default + 🔓 open protection | Administrator
+- System tray: two-state shield icon (green filled / grey outline), themed menu with GDI+ icons
+- **Custom WPF toast notifications** — fully themed, slides in from bottom-right, shows rule name and category; no system balloon
 
 ### Settings
-| | |
-|---|---|
-| **Multi-language** | English · Dutch · German · French · Spanish. Add any language by dropping a JSON file in `lang\`. |
-| **Settings tabs** | General · Appearance · Default Action · WiFi Rules · Advanced · About |
-| **Import / Export** | Export rules, groups, and preferences to a `.masselguard` file. Version-tolerant format with mismatch warning on import. |
-| **Setup wizard** | First-run wizard for language, mode, and automation. Re-runnable from Settings. |
-| **Install / Uninstall** | Built-in installer: copies to Program Files, Start Menu shortcut, optional auto-start. |
-| **Orphan cleanup** | Detect and remove `WireGuardTunnel$` services left behind after a crash. |
-| **Update checker** | Compares running version against GitHub tags. |
+- **Fully deferred save** — all changes staged until Save; Cancel reverts everything including theme preview
+- **Tunnel Groups** dedicated tab in Settings
+- Extended log shows only **changed** fields on Save
+- Start with Windows toggle (Scheduled Task, no UAC on subsequent launches)
+- Notification duration picker (3 / 5 / 10 / 15 / 30 s)
+- Five languages: English, Dutch, German, French, Spanish
 
 ---
 
@@ -82,7 +65,7 @@ For users who do not want automation, MasselGUARD is also a clean WireGuard fron
 |---|---|
 | OS | Windows 10 or 11 (x64) |
 | Runtime | [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) |
-| Elevation | Administrator |
+| Elevation | Administrator (or Scheduled Task for UAC-free managed launch) |
 | Standalone / Mixed | `tunnel.dll` + `wireguard.dll` next to the exe (included in release zip) |
 | Companion / Mixed | [WireGuard for Windows](https://wireguard.com/install) installed |
 
@@ -90,11 +73,10 @@ For users who do not want automation, MasselGUARD is also a clean WireGuard fron
 
 ## Quick start
 
-1. Extract the release zip and run `MasselGUARD.exe` (accept UAC prompt)
-2. Complete the setup wizard — choose language, mode, and automation preference
-3. Add tunnels (**+ Add** for Standalone, **Import → Link** for Companion)
-4. Add WiFi rules under **Settings → WiFi Rules**
-5. MasselGUARD handles the rest from the tray
+1. Extract the zip, run `MasselGUARD.exe`
+2. Complete the setup wizard — or import a `.masselguard` settings file on Step 0
+3. Add tunnels, create WiFi rules, configure defaults
+4. MasselGUARD handles the rest from the tray
 
 ---
 
@@ -104,10 +86,18 @@ For users who do not want automation, MasselGUARD is also a clean WireGuard fron
 BUILD.bat
 ```
 
-Compiles, copies themes, and copies DLLs from `wireguard-deps\` to `dist\`. If DLLs are missing, run `tunnelbuild\tunnelbuild.bat` first (requires Go + gcc).
+Generates build number (`2.9.0.YYMMDDHHMM`), injects into `UpdateChecker.cs`, compiles, copies output to `dist\`.
+
+Banner:
+```
+  ----------------------------------------
+    MasselGUARD  v2.9.0.2505181430
+    Harold Masselink  |  Claude.ai
+  ----------------------------------------
+```
 
 ---
 
 ## Security
 
-Tunnel configs are encrypted with Windows DPAPI (`CurrentUser` scope). The plaintext temp file written during connection is locked to `SYSTEM + Administrators + owning user` from the first byte and deleted within ~200 ms. See [`docs/MasselGUARD.md`](docs/MasselGUARD.md#14-security-model).
+Tunnel configs encrypted with Windows DPAPI (`CurrentUser` scope). Plaintext temp file during connection is locked to `SYSTEM + Administrators + owner` from byte 0, deleted within ~200 ms.

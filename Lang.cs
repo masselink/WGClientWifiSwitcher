@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using MasselGUARD.Models;
 
 namespace MasselGUARD
 {
@@ -59,11 +60,9 @@ namespace MasselGUARD
                 _strings     = dict;
                 _currentCode = code;
 
-                // Save to config so the choice persists across restarts
-                AppConfig.SaveLanguage(code);
-
-                // Notify all bindings that every key may have changed
-                OnPropertyChanged(string.Empty);
+                // Notify WPF bindings: both string.Empty (all props) and "Item[]" (indexer)
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs("Item[]"));
                 LanguageChanged?.Invoke(this, EventArgs.Empty);
             }
             catch { /* corrupt file — keep current strings */ }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -17,13 +18,17 @@ namespace MasselGUARD.Views
         public string  ResultPostConnectScript { get; private set; } = "";
         public string  ResultPreDisconnectScript  { get; private set; } = "";
         public string  ResultPostDisconnectScript { get; private set; } = "";
+        public bool    ResultIsDefault         { get; private set; }
+        public bool    ResultIsOpenProtection  { get; private set; }
 
         private readonly string? _originalName;
 
         public TunnelConfigDialog(string? existingName = null, string? existingConfig = null,
                                   string? existingGroup = null,
                                   string? preConnect = null, string? postConnect = null,
-                                  string? preDisconnect = null, string? postDisconnect = null)
+                                  string? preDisconnect = null, string? postDisconnect = null,
+                                  bool isDefault = false, bool isOpenProtection = false,
+                                  List<string>? groupNames = null)
         {
             InitializeComponent();
             _originalName = existingName;
@@ -45,12 +50,13 @@ namespace MasselGUARD.Views
             if (!string.IsNullOrEmpty(existingConfig))
                 LoadFromConfig(existingConfig);
 
-            // Populate group picker from AppConfig
+            // Populate group picker — use passed names or fall back to live config
             GroupPicker.Items.Clear();
             GroupPicker.Items.Add("");
-            var groups = MainWindow.GetConfigStatic()?.TunnelGroups;
-            if (groups != null)
-                foreach (var g in groups) GroupPicker.Items.Add(g.Name);
+            var groups = groupNames
+                ?? MainWindow.GetConfigStatic()?.TunnelGroups?.Select(g => g.Name).ToList()
+                ?? new List<string>();
+            foreach (var g in groups) GroupPicker.Items.Add(g);
             GroupPicker.SelectedItem = existingGroup ?? "";
 
             // Load script fields
@@ -58,6 +64,10 @@ namespace MasselGUARD.Views
             LoadScript(PostConnectBox,    PostConnectEmbedBox,    PostConnectEmbed,    postConnect);
             LoadScript(PreDisconnectBox,  PreDisconnectEmbedBox,  PreDisconnectEmbed,  preDisconnect);
             LoadScript(PostDisconnectBox, PostDisconnectEmbedBox, PostDisconnectEmbed, postDisconnect);
+
+            // Default / open protection toggles
+            if (IsDefaultToggle        != null) IsDefaultToggle.IsChecked        = isDefault;
+            if (IsOpenProtectionToggle != null) IsOpenProtectionToggle.IsChecked = isOpenProtection;
         }
 
         // ── Load config into form fields ─────────────────────────────────────
@@ -187,6 +197,8 @@ namespace MasselGUARD.Views
             ResultPostConnectScript    = CaptureScript(PostConnectBox,    PostConnectEmbedBox,    PostConnectEmbed);
             ResultPreDisconnectScript  = CaptureScript(PreDisconnectBox,  PreDisconnectEmbedBox,  PreDisconnectEmbed);
             ResultPostDisconnectScript = CaptureScript(PostDisconnectBox, PostDisconnectEmbedBox, PostDisconnectEmbed);
+            ResultIsDefault        = IsDefaultToggle?.IsChecked        == true;
+            ResultIsOpenProtection = IsOpenProtectionToggle?.IsChecked == true;
             DialogResult = true;
         }
 

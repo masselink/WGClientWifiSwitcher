@@ -16,6 +16,7 @@ using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using System.Text;
 using System.Threading;
+using MasselGUARD.Models;
 
 namespace MasselGUARD
 {

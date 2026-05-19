@@ -13,11 +13,14 @@ namespace MasselGUARD.Views
         public string ResultPostConnectScript  { get; private set; } = "";
         public string ResultPreDisconnectScript  { get; private set; } = "";
         public string ResultPostDisconnectScript { get; private set; } = "";
+        public bool   ResultIsDefault          { get; private set; }
+        public bool   ResultIsOpenProtection   { get; private set; }
 
         public TunnelMetadataDialog(string tunnelName, string currentGroup,
                                     string currentNotes, List<string> groups,
                                     string preConnect = "", string postConnect = "",
-                                    string preDisconnect = "", string postDisconnect = "")
+                                    string preDisconnect = "", string postDisconnect = "",
+                                    bool isDefault = false, bool isOpenProtection = false)
         {
             InitializeComponent();
 
@@ -35,6 +38,10 @@ namespace MasselGUARD.Views
             PostConnectBox.Text   = postConnect;
             PreDisconnectBox.Text = preDisconnect;
             PostDisconnectBox.Text = postDisconnect;
+
+            // Default / open protection toggles
+            if (IsDefaultToggle        != null) IsDefaultToggle.IsChecked        = isDefault;
+            if (IsOpenProtectionToggle != null) IsOpenProtectionToggle.IsChecked = isOpenProtection;
         }
 
         private void SaveBtn_Click(object sender, RoutedEventArgs e)
@@ -45,6 +52,8 @@ namespace MasselGUARD.Views
             ResultPostConnectScript   = PostConnectBox.Text.Trim();
             ResultPreDisconnectScript  = PreDisconnectBox.Text.Trim();
             ResultPostDisconnectScript = PostDisconnectBox.Text.Trim();
+            ResultIsDefault           = IsDefaultToggle?.IsChecked        == true;
+            ResultIsOpenProtection    = IsOpenProtectionToggle?.IsChecked == true;
             DialogResult = true;
         }
 

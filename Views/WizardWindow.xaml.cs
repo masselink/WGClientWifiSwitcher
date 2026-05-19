@@ -1,223 +1,303 @@
 using System;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media;
-using System.Threading.Tasks;
+using MasselGUARD.Models;
+using MasselGUARD.ViewModels;
+
 namespace MasselGUARD.Views
 {
     public partial class WizardWindow : Window
     {
-        private readonly MainWindow _main;
-        private int   _step      = 0;
-        private const int TotalSteps = 6;   // steps 0–5
+        private readonly WizardViewModel _vm;
+        private readonly MainWindow      _main;
+        private readonly bool            _isUpgrade;
 
-        // Deferred values — only applied on Finish
-        private string _pendingLang = "";
+        private const int TotalSteps = 5; // steps 0-4
 
-        public WizardWindow(MainWindow main)
+        public WizardWindow(MainWindow main, bool isUpgrade = false)
         {
+            _main      = main;
+            _isUpgrade = isUpgrade;
+            _vm = new WizardViewModel(
+                main.ConfigSvc,
+                main.LogSvc,
+                code => Dispatcher.Invoke(() => Lang.Instance.Load(code)));
+
+            _vm.Finished += () => Dispatcher.Invoke(() => { DialogResult = true;  Close(); });
+            _vm.Skipped  += () => Dispatcher.Invoke(() => { DialogResult = false; Close(); });
+
             InitializeComponent();
-            _main = main;
+            DataContext = _vm;
 
-            // Populate language picker with DataTemplate (code badge + name)
-            foreach (var (code, name) in Lang.AvailableLanguages())
-                WizLangPicker.Items.Add(new LangItem(code, name));
-            foreach (LangItem item in WizLangPicker.Items)
-                if (string.Equals(item.Code, Lang.Instance.CurrentCode, StringComparison.OrdinalIgnoreCase))
-                { WizLangPicker.SelectedItem = item; break; }
+            // Language picker
+            WizLangPicker.Items.Clear();
+            foreach (var item in _vm.AvailableLanguages)
+                WizLangPicker.Items.Add(item);
+            WizLangPicker.SelectedItem = _vm.SelectedLanguage;
 
-            // Pre-select current values (display only — not applied until Finish)
-            var cfg = _main.GetConfig();
-            WizModeStandalone.IsChecked = cfg.Mode == AppMode.Standalone;
-            WizModeCompanion.IsChecked  = cfg.Mode == AppMode.Companion;
-            WizModeMixed.IsChecked      = cfg.Mode == AppMode.Mixed || (
-                !WizModeStandalone.IsChecked.GetValueOrDefault() &&
-                !WizModeCompanion.IsChecked.GetValueOrDefault());
-            WizManualToggle.IsChecked = cfg.ManualMode;
+            _vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(WizardViewModel.Step))
+                    Dispatcher.Invoke(() => { UpdateDots(); UpdateStepVisibility(); });
+            };
 
-            ShowStep(0);
+            UpdateDots();
+            UpdateStepVisibility();
         }
 
-        // ── Step navigation ───────────────────────────────────────────────────
-        private void ShowStep(int step)
+        // ── Step visibility ───────────────────────────────────────────────────
+        private void UpdateStepVisibility()
         {
-            _step = step;
+            // 5 steps: Step0–Step4
+            var steps = new[] { Step0, Step1, Step2, Step3, Step4 };
+            for (int i = 0; i < steps.Length; i++)
+                if (steps[i] != null)
+                    steps[i].Visibility = i == _vm.Step
+                        ? Visibility.Visible : Visibility.Collapsed;
 
-            Step0.Visibility = step == 0 ? Visibility.Visible : Visibility.Collapsed;
-            Step1.Visibility = step == 1 ? Visibility.Visible : Visibility.Collapsed;
-            Step2.Visibility = step == 2 ? Visibility.Visible : Visibility.Collapsed;
-            Step3.Visibility = step == 3 ? Visibility.Visible : Visibility.Collapsed;
-            Step4.Visibility = step == 4 ? Visibility.Visible : Visibility.Collapsed;
-            Step5.Visibility = step == 5 ? Visibility.Visible : Visibility.Collapsed;
+            // ── Step 0: Welcome ──────────────────────────────────────────────
+            if (WizInstallChoice != null)
+                WizInstallChoice.Visibility =
+                    (!_isUpgrade && _main.AppRunMode == MainWindow.AppRunModeKind.Standalone)
+                    ? Visibility.Visible : Visibility.Collapsed;
 
-            var dots   = new[] { Dot0, Dot1, Dot2, Dot3, Dot4, Dot5 };
-            var accent = (SolidColorBrush)FindResource("Accent");
-            var dim    = (SolidColorBrush)FindResource("BorderColor");
-            for (int i = 0; i < dots.Length; i++)
-                dots[i].Fill = i == step ? accent : dim;
+            if (WizUpgradeNotice != null)
+                WizUpgradeNotice.Visibility = _isUpgrade ? Visibility.Visible : Visibility.Collapsed;
+            if (_isUpgrade)
+            {
+                if (WizUpgradeTitle != null)
+                    WizUpgradeTitle.Text = Lang.T("WizardUpgradeTitle");
+                if (WizUpgradeBody != null)
+                    WizUpgradeBody.Text  = Lang.T("WizardUpgradeBody",
+                        UpdateChecker.CurrentVersionString, _vm.PreviousAppVersion);
+            }
 
-            BtnBack.IsEnabled = step > 0;
-            BtnNext.Content   = step == TotalSteps - 1
+            // ── Step 1: Language & theme ─────────────────────────────────────
+            if (_vm.Step == 1)
+            {
+                WizLangPicker.SelectedItem = _vm.SelectedLanguage;
+                bool isDark = _main.ConfigSvc.Config.AutoTheme
+                    ? (bool?)null == null  // placeholder
+                    : _main.ConfigSvc.Config.ActiveDarkTheme != null;
+                bool autoTheme = _main.ConfigSvc.Config.AutoTheme;
+                if (WizThemeAuto != null)  WizThemeAuto.IsChecked  = autoTheme;
+                if (WizThemeDark != null)  WizThemeDark.IsChecked  = !autoTheme && IsCurrentThemeDark();
+                if (WizThemeLight != null) WizThemeLight.IsChecked = !autoTheme && !IsCurrentThemeDark();
+            }
+
+            // ── Step 2: Mode ─────────────────────────────────────────────────
+            if (_vm.Step == 2)
+            {
+                WizModeStandalone.IsChecked = _vm.Mode == AppMode.Standalone;
+                WizModeCompanion.IsChecked  = _vm.Mode == AppMode.Companion;
+                WizModeMixed.IsChecked      = _vm.Mode == AppMode.Mixed;
+            }
+
+            // ── Step 3: Automation ───────────────────────────────────────────
+            if (_vm.Step == 3)
+            {
+                WizManualToggle.IsChecked = _vm.DisableWifiRules;
+                if (WizShowRulesToggle != null)
+                    WizShowRulesToggle.IsChecked = _main.ConfigSvc.Config.ShowWifiRulesOnMainWindow;
+                if (WizShowRulesCard != null)
+                    WizShowRulesCard.Visibility = _vm.DisableWifiRules
+                        ? Visibility.Collapsed : Visibility.Visible;
+            }
+
+            // ── Step 4: Done ─────────────────────────────────────────────────
+            if (_vm.Step == 4)
+            {
+                if (WizVersionLabel != null)
+                    WizVersionLabel.Text = $"MasselGUARD v{UpdateChecker.CurrentVersionString}";
+                if (WizCheckUpdateBtn != null)
+                    WizCheckUpdateBtn.Content = Lang.T("BtnCheckUpdate");
+            }
+
+            // Nav buttons
+            BtnBack.IsEnabled = _vm.CanGoBack;
+            BtnNext.Content   = _vm.IsLastStep
                 ? Lang.T("WizardBtnFinish")
                 : Lang.T("WizardBtnNext");
-            BtnSkip.Visibility = step == TotalSteps - 1
-                ? Visibility.Collapsed : Visibility.Visible;
-
-            if (step == 2) RefreshModeStatus();
-            if (step == 5) RefreshWizardAbout();
         }
 
-        // ── About panel (shown on Done step) ─────────────────────────────────
-        private void RefreshWizardAbout()
+        private bool IsCurrentThemeDark()
         {
-            var cfg     = _main.GetConfig();
-            var current = UpdateChecker.CurrentVersionString;
-            WizVersionLabel.Text      = Lang.T("AppTitle") + "  v" + current;
-            WizCheckUpdateBtn.Content = Lang.T("BtnCheckUpdate");
-
-            if (!string.IsNullOrEmpty(cfg.LatestKnownVersion))
-            {
-                var latest = cfg.LatestKnownVersion;
-                WizUpdateStatusLabel.Text = string.Compare(current, latest, StringComparison.OrdinalIgnoreCase) >= 0
-                    ? Lang.T("SettingsUpdateCurrent", current)
-                    : Lang.T("SettingsUpdateAvailable", latest);
-            }
-            else
-            {
-                WizUpdateStatusLabel.Text = Lang.T("SettingsUpdateNever");
-            }
-
-            WizLastCheckedLabel.Text = cfg.LastUpdateCheck == default
-                ? ""
-                : Lang.T("SettingsUpdateLastChecked",
-                    cfg.LastUpdateCheck.ToLocalTime().ToString("g"));
+            var bg = Application.Current?.Resources["WindowBg"] as SolidColorBrush;
+            if (bg == null) return true;
+            var c = bg.Color;
+            double lum = 0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B;
+            return lum < 128;
         }
 
-        private async void WizCheckUpdate_Click(object sender, RoutedEventArgs e)
+        // ── Dot indicators ────────────────────────────────────────────────────
+        private void UpdateDots()
         {
-            WizCheckUpdateBtn.IsEnabled = false;
-            WizCheckUpdateBtn.Content   = Lang.T("SettingsUpdateChecking");
-            await UpdateChecker.CheckAsync(_main.GetConfig(), () => _main.SaveConfigPublic(), Dispatcher);
-            WizCheckUpdateBtn.IsEnabled = true;
-            RefreshWizardAbout();
-        }
-
-        private void WizGithubLink_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
-        {
-            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
-                "https://github.com/masselink/MasselGUARD") { UseShellExecute = true }); }
-            catch { }
-        }
-
-        // ── Mode status — shows DLL + WG readiness for selected mode ──────────
-        private void RefreshModeStatus()
-        {
-            AppMode mode = AppMode.Standalone;
-            if (WizModeCompanion.IsChecked == true) mode = AppMode.Companion;
-            else if (WizModeMixed.IsChecked == true) mode = AppMode.Mixed;
-
-            bool hasDlls = TunnelDll.ValidateDlls() == null;
-            bool hasWg   = MainWindow.FindWireGuardExe() != null;
-            var  lines   = new System.Text.StringBuilder();
-            bool allOk   = true;
-
-            if (mode != AppMode.Companion)
-            {
-                if (hasDlls) lines.AppendLine("✓  " + Lang.T("WizardDllOk"));
-                else         { lines.AppendLine("⚠  " + Lang.T("WizardDllMissing")); allOk = false; }
-            }
-            if (mode != AppMode.Standalone)
-            {
-                if (hasWg) lines.AppendLine("✓  " + Lang.T("WizardWgBody"));
-                else
-                {
-                    lines.AppendLine("⚠  " + Lang.T("WizardWgMissing"));
-                    lines.AppendLine("    ↳ " + Lang.T("WgDownloadHint"));
-                    allOk = false;
-                }
-            }
-            ModeStatusLabel.Text       = lines.ToString().TrimEnd();
-            ModeStatusLabel.Foreground = allOk ? ThemeRes.Success : ThemeRes.Danger;
+            var dots   = new[] { Dot0, Dot1, Dot2, Dot3, Dot4 };
+            var accent = (Brush)FindResource("Accent");
+            var dim    = (Brush)FindResource("BorderColor");
+            for (int i = 0; i < dots.Length; i++)
+                if (dots[i] != null)
+                    dots[i].Fill = i == _vm.Step ? accent : dim;
         }
 
         // ── Navigation ────────────────────────────────────────────────────────
-        private void Next_Click(object sender, RoutedEventArgs e)
+        private void BtnBack_Click(object sender, RoutedEventArgs e) => _vm.BackCommand.Execute(null);
+        private void BtnNext_Click(object sender, RoutedEventArgs e) => _vm.NextCommand.Execute(null);
+        private void BtnSkip_Click(object sender, RoutedEventArgs e) => _vm.SkipCommand.Execute(null);
+
+        // ── Mode ──────────────────────────────────────────────────────────────
+        private void WizMode_Changed(object sender, RoutedEventArgs e)
         {
-            if (_step < TotalSteps - 1)
-            {
-                ShowStep(_step + 1);
-            }
-            else
-            {
-                ApplyAndClose();
-            }
+            if (WizModeStandalone?.IsChecked == true)     _vm.Mode = AppMode.Standalone;
+            else if (WizModeCompanion?.IsChecked == true) _vm.Mode = AppMode.Companion;
+            else                                          _vm.Mode = AppMode.Mixed;
         }
 
-        private void Back_Click(object sender, RoutedEventArgs e)
-        {
-            if (_step > 0) ShowStep(_step - 1);
-        }
-
-        private void Skip_Click(object sender, RoutedEventArgs e)
-        {
-            // Skip discards all pending changes
-            Close();
-        }
-
-        // ── Apply all deferred changes at once on Finish ──────────────────────
-        private void ApplyAndClose()
-        {
-            var cfg = _main.GetConfig();
-
-            // Language — already shown live in the UI but commit the code now
-            if (!string.IsNullOrEmpty(_pendingLang))
-                AppConfig.SaveLanguage(_pendingLang);
-
-            // Mode
-            AppMode newMode = AppMode.Standalone;
-            if (WizModeCompanion.IsChecked == true) newMode = AppMode.Companion;
-            else if (WizModeMixed.IsChecked == true) newMode = AppMode.Mixed;
-            if (cfg.Mode != newMode)
-            {
-                _main.SetMode(newMode);
-                _main.ApplyLocalTunnelModePublic();
-            }
-
-            // Manual mode
-            bool newManual = WizManualToggle.IsChecked == true;
-            if (cfg.ManualMode != newManual)
-            {
-                cfg.ManualMode = newManual;
-                _main.ApplyManualMode();
-            }
-
-            _main.SaveConfigPublic();
-            Close();
-        }
-
-        // ── Language — show change live but defer save to Finish ─────────────
+        // ── Language ──────────────────────────────────────────────────────────
         private void WizLang_Changed(object sender,
             System.Windows.Controls.SelectionChangedEventArgs e)
         {
             if (WizLangPicker.SelectedItem is LangItem item)
+                _vm.SelectedLanguage = item;
+        }
+
+        // ── Theme ─────────────────────────────────────────────────────────────
+        private void WizTheme_Changed(object sender, RoutedEventArgs e)
+        {
+            var cfg = _main.ConfigSvc.Config;
+            if (WizThemeAuto?.IsChecked == true)
             {
-                _pendingLang = item.Code;
-                // Apply display immediately so the wizard UI updates
-                Lang.Instance.Load(item.Code);
-                // Do NOT call AppConfig.SaveLanguage here — deferred to Finish
+                cfg.AutoTheme = true;
+                // Apply system preference immediately
+                bool sysIsDark = ThemeManager.GetSystemIsDark();
+                ThemeManager.Instance.Load(sysIsDark
+                    ? (cfg.ActiveDarkTheme  ?? "default-dark")
+                    : (cfg.ActiveLightTheme ?? "default-light"));
+            }
+            else if (WizThemeDark?.IsChecked == true)
+            {
+                cfg.AutoTheme = false;
+                ThemeManager.Instance.Load(cfg.ActiveDarkTheme ?? "default-dark");
+            }
+            else if (WizThemeLight?.IsChecked == true)
+            {
+                cfg.AutoTheme = false;
+                ThemeManager.Instance.Load(cfg.ActiveLightTheme ?? "default-light");
             }
         }
 
-        // ── Mode — update status display but don't apply to config yet ────────
-        private void WizMode_Changed(object sender, RoutedEventArgs e)
+        // ── Automation ────────────────────────────────────────────────────────
+        private void WizManualToggle_Changed(object sender, RoutedEventArgs e)
         {
-            if (_step == 2) RefreshModeStatus();
+            bool on = WizManualToggle?.IsChecked == true;
+            _vm.DisableWifiRules = on;
+            if (WizShowRulesCard != null)
+                WizShowRulesCard.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        private void WizShowRules_Changed(object sender, RoutedEventArgs e)
+        {
+            _main.ConfigSvc.Config.ShowWifiRulesOnMainWindow =
+                WizShowRulesToggle?.IsChecked == true;
+        }
+
+        // ── Install choice ────────────────────────────────────────────────────
+        private void WizRunPortable_Click(object sender, RoutedEventArgs e)
+            => _vm.NextCommand.Execute(null);
+
+        private void WizInstallNow_Click(object sender, RoutedEventArgs e)
+        {
+            _main.RunInstallPublic();
+            _vm.NextCommand.Execute(null);
+        }
+
+        // ── Import settings ───────────────────────────────────────────────────
+        private void WizImport_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title  = Lang.T("SettingsImportTitle"),
+                Filter = "MasselGUARD settings (*.masselguard;*.json)|*.masselguard;*.json",
+            };
+            if (dlg.ShowDialog() != true) return;
+
+            try
+            {
+                string fileVersion = _main.ConfigSvc.Import(dlg.FileName);
+                string current     = UpdateChecker.CurrentVersionString;
+
+                if (!string.IsNullOrEmpty(fileVersion) && fileVersion != current)
+                {
+                    int cmp = string.Compare(fileVersion, current, StringComparison.OrdinalIgnoreCase);
+                    var key = cmp > 0 ? "SettingsImportVersionNewer" : "SettingsImportVersionWarning";
+                    var proceed = MessageBox.Show(
+                        Lang.T(key, fileVersion, current),
+                        Lang.T("SettingsImportTitle"),
+                        MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                    if (proceed != MessageBoxResult.Yes)
+                    {
+                        _main.ConfigSvc.Load();
+                        return;
+                    }
+                }
+
+                // Build summary
+                var cfg = _main.ConfigSvc.Config;
+                string summary = $"{cfg.Rules.Count} WiFi rules, {cfg.TunnelGroups.Count} groups, mode: {cfg.Mode}";
+
+                if (WizImportResultLabel != null)
+                {
+                    WizImportResultLabel.Text       = Lang.T("WizardImportSuccess");
+                    WizImportResultLabel.Visibility = Visibility.Visible;
+                }
+
+                // Sync VM from imported config
+                _vm.LoadFromConfig();
+
+                // Jump to Done step
+                while (_vm.Step < TotalSteps - 1)
+                    _vm.NextCommand.Execute(null);
+            }
+            catch (Exception ex)
+            {
+                if (WizImportResultLabel != null)
+                {
+                    WizImportResultLabel.Foreground = (Brush)FindResource("ErrorColor");
+                    WizImportResultLabel.Text       = Lang.T("WizardImportFailed", ex.Message);
+                    WizImportResultLabel.Visibility = Visibility.Visible;
+                }
+            }
+        }
+
+        // ── Update check ──────────────────────────────────────────────────────
+        private async void WizCheckUpdate_Click(object sender, RoutedEventArgs e)
+        {
+            if (WizCheckUpdateBtn != null)
+            {
+                WizCheckUpdateBtn.IsEnabled = false;
+                WizCheckUpdateBtn.Content   = Lang.T("SettingsUpdateChecking");
+            }
+            await _vm.CheckUpdateCommand.ExecuteAsync(null);
+            if (WizCheckUpdateBtn != null) WizCheckUpdateBtn.IsEnabled = true;
         }
 
         // ── Window chrome ─────────────────────────────────────────────────────
-        private void TitleBar_MouseDown(object sender,
-            System.Windows.Input.MouseButtonEventArgs e)
+        private void TitleBar_MouseDown(object sender, MouseButtonEventArgs e)
         {
-            if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed) DragMove();
+            if (e.LeftButton == MouseButtonState.Pressed) DragMove();
+        }
+    }
+
+    internal static class CommandExtensions
+    {
+        internal static System.Threading.Tasks.Task ExecuteAsync(
+            this Infrastructure.AsyncRelayCommand cmd, object? parameter)
+        {
+            var tcs = new System.Threading.Tasks.TaskCompletionSource();
+            cmd.Execute(parameter);
+            tcs.SetResult();
+            return tcs.Task;
         }
     }
 }

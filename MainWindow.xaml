@@ -121,12 +121,16 @@
                         <TextBlock Grid.Column="0"
                                    Text="{Binding [StatusWifi], Source={x:Static local:Lang.Instance}}"
                                    Foreground="{DynamicResource TextMuted}" FontSize="11" VerticalAlignment="Center"
-                                   Visibility="{DynamicResource Theme.ShowStatusWifi}"/>
+                                   Visibility="{DynamicResource Theme.ShowStatusWifi}"
+                                   ToolTip="Current WiFi network"
+                                   ToolTipService.InitialShowDelay="800"/>
                         <TextBlock Grid.Column="1" x:Name="WifiLabel"
                                    Text="{Binding [StatusScanning], Source={x:Static local:Lang.Instance}}"
                                    FontSize="11" FontWeight="Bold" Margin="6,0,0,0"
                                    VerticalAlignment="Center"
-                                   Visibility="{DynamicResource Theme.ShowStatusWifi}"/>
+                                   Visibility="{DynamicResource Theme.ShowStatusWifi}"
+                                   ToolTip="Click to see WiFi rules for this network"
+                                   ToolTipService.InitialShowDelay="800"/>
 
                         <Rectangle Grid.Column="2" Width="1" Height="14" Margin="16,0"
                                    Fill="{DynamicResource BorderColor}" VerticalAlignment="Center"/>
@@ -134,14 +138,17 @@
                         <TextBlock Grid.Column="3"
                                    Text="{Binding [StatusActiveTunnel], Source={x:Static local:Lang.Instance}}"
                                    Foreground="{DynamicResource TextMuted}" FontSize="11" VerticalAlignment="Center"
-                                   Visibility="{DynamicResource Theme.ShowStatusTunnel}"/>
+                                   Visibility="{DynamicResource Theme.ShowStatusTunnel}"
+                                   ToolTip="Active tunnel connection"
+                                   ToolTipService.InitialShowDelay="800"/>
                         <TextBlock Grid.Column="4" x:Name="TunnelLabel"
                                    Text="{Binding [StatusNone], Source={x:Static local:Lang.Instance}}"
                                    FontSize="11" FontWeight="Bold" Margin="6,0,0,0"
                                    Foreground="{DynamicResource Success}" VerticalAlignment="Center"
-                                   Visibility="{DynamicResource Theme.ShowStatusTunnel}"/>
+                                   Visibility="{DynamicResource Theme.ShowStatusTunnel}"
+                                   ToolTipService.InitialShowDelay="800"/>
 
-                        <!-- Action buttons — right-aligned in column 6 -->
+
                         <StackPanel Grid.Column="6" Orientation="Horizontal"
                                     HorizontalAlignment="Right" VerticalAlignment="Center"
                                     Margin="0,0,4,0">
@@ -151,18 +158,6 @@
                                     Visibility="Collapsed"
                                     ToolTip="{Binding [TooltipQuickConnect], Source={x:Static local:Lang.Instance}}"
                                     Click="QuickConnect_Click"/>
-                            <Button x:Name="OpenWgBtn"
-                                    Content="{Binding [BtnOpenWireGuard], Source={x:Static local:Lang.Instance}}"
-                                    Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
-                                    Margin="6,0,0,0" Visibility="Collapsed"
-                                    ToolTip="{Binding [TooltipWireGuard], Source={x:Static local:Lang.Instance}}"
-                                    Click="OpenWireGuardGui_Click"/>
-                            <Button x:Name="WireGuardLogBtn"
-                                    Content="{Binding [BtnShowLog], Source={x:Static local:Lang.Instance}}"
-                                    Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
-                                    Margin="6,0,0,0" Visibility="Collapsed"
-                                    ToolTip="{Binding [TooltipLog], Source={x:Static local:Lang.Instance}}"
-                                    Click="ShowWireGuardLog_Click"/>
                         </StackPanel>
                     </Grid>
                 </Border>
@@ -190,108 +185,204 @@
                 </Border>
 
                 <!-- ── Main content ─────────────────────────────────────────── -->
-                <Grid Grid.Row="4" Margin="14,12,14,8">
+                <Grid Grid.Row="4" Margin="14,12,14,8"
+                      Grid.IsSharedSizeScope="True">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="10"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" SharedSizeGroup="HeaderRow"/>
+                        <RowDefinition Height="*" MinHeight="80"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition x:Name="WifiRulesHeaderRow" Height="Auto"/>
+                        <RowDefinition x:Name="WifiRulesPanelRow"  Height="*" MinHeight="0"/>
+                        <RowDefinition x:Name="WifiRulesBtnsRow"   Height="Auto"/>
+                    </Grid.RowDefinitions>
 
                     <!-- LEFT: Tunnels only -->
-                    <Grid Grid.Column="0" x:Name="LeftTunnelGrid">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*" MinHeight="80"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
 
-                        <!-- Tunnels header + count badge -->
-                        <Grid Grid.Row="0" Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0"
-                                       Text="{Binding [SectionTunnels], Source={x:Static local:Lang.Instance}}"
-                                       Style="{StaticResource SectionLabel}" Margin="0"/>
-                            <Border Grid.Column="1" x:Name="TunnelCountBadge"
-                                    Background="{DynamicResource BorderColor}"
-                                    CornerRadius="8" Padding="6,1" Margin="6,0,0,0"
+                        <!-- Header row: TUNNELS label + category tabs inline left-aligned -->
+                        <StackPanel Grid.Column="0" Grid.Row="0"
+                                    Orientation="Horizontal"
+                                    Margin="0,0,0,6"
                                     VerticalAlignment="Center">
-                                <TextBlock x:Name="TunnelCountLabel"
-                                           FontSize="9"
-                                           Foreground="{DynamicResource TextMuted}" Text="0"/>
+                            <TextBlock Text="{Binding [SectionTunnels], Source={x:Static local:Lang.Instance}}"
+                                       Style="{StaticResource SectionLabel}" Margin="0,0,6,0"
+                                       VerticalAlignment="Center"/>
+                            <!-- Tunnel count / hidden-override badge — sits right after the label -->
+                            <Border x:Name="HiddenCountBadge"
+                                    Background="{DynamicResource BorderColor}"
+                                    CornerRadius="8" Padding="6,1" Margin="0,0,10,0"
+                                    VerticalAlignment="Center">
+                                <Button x:Name="HiddenCountBtn"
+                                        Style="{StaticResource FlatBtn}"
+                                        FontSize="9"
+                                        Padding="0"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Click="HiddenCountBtn_Click"/>
                             </Border>
-                        </Grid>
-
-                        <!-- Group tab strip — rebuilt by RebuildTunnelGroups() -->
-                        <Border Grid.Row="1"
-                                Background="{DynamicResource Surface}"
-                                BorderBrush="{DynamicResource BorderColor}" BorderThickness="0,0,0,1"
-                                Margin="0,0,0,0">
                             <ScrollViewer HorizontalScrollBarVisibility="Auto"
                                           VerticalScrollBarVisibility="Disabled"
-                                          Background="Transparent">
+                                          Background="Transparent"
+                                          VerticalAlignment="Center">
                                 <StackPanel x:Name="TunnelTabButtons"
                                             Orientation="Horizontal"
                                             Background="Transparent"/>
                             </ScrollViewer>
+                        </StackPanel>
+
+                        <!-- Tunnel box -->
+                        <Border Grid.Column="0" Grid.Row="1"
+                                Background="{DynamicResource CardBg}"
+                                BorderBrush="{DynamicResource BorderColor}" BorderThickness="1"
+                                CornerRadius="{DynamicResource Theme.CornerRadius}">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+
+                                <!-- Column header bar -->
+                                <Border Grid.Row="0"
+                                        Background="{DynamicResource Surface}"
+                                        BorderBrush="{DynamicResource BorderColor}"
+                                        BorderThickness="0,0,0,1"
+                                        CornerRadius="{DynamicResource Theme.CornerRadiusTop}">
+                                    <Grid Margin="8,5">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="3*"/>
+                                            <ColumnDefinition Width="1.2*"/>
+                                            <ColumnDefinition Width="1.8*"/>
+                                            <ColumnDefinition Width="Auto" MinWidth="0"/>
+                                            <ColumnDefinition Width="1.4*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding [TunnelColName],   Source={x:Static local:Lang.Instance}}" FontSize="10" Foreground="{DynamicResource TextMuted}"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding [TunnelColType],   Source={x:Static local:Lang.Instance}}" FontSize="10" Foreground="{DynamicResource TextMuted}"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding [TunnelColStatus], Source={x:Static local:Lang.Instance}}" FontSize="10" Foreground="{DynamicResource TextMuted}"/>
+                                        <TextBlock Grid.Column="3" x:Name="RulesColHeader"
+                                                   Text="{Binding [TunnelColRules], Source={x:Static local:Lang.Instance}}"
+                                                   FontSize="10" Foreground="{DynamicResource TextMuted}"
+                                                   Padding="8,0"
+                                                   Visibility="{Binding DataContext.RulesColumnVisibility, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                                        <TextBlock Grid.Column="4" Text="{Binding [TunnelColAction], Source={x:Static local:Lang.Instance}}" FontSize="10" Foreground="{DynamicResource TextMuted}" HorizontalAlignment="Center"/>
+                                    </Grid>
+                                </Border>
+
+                                <!-- Tunnel rows -->
+                                <ListView Grid.Row="1" x:Name="TunnelsListView"
+                                          ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                          SelectionChanged="TunnelsListView_SelectionChanged"
+                                          Background="Transparent"
+                                          BorderThickness="0"
+                                          AllowDrop="True"
+                                          PreviewMouseMove="TunnelList_PreviewMouseMove"
+                                          Drop="TunnelList_Drop"
+                                          DragOver="TunnelList_DragOver">
+                                    <ListView.ItemContainerStyle>
+                                        <Style TargetType="ListViewItem">
+                                            <Setter Property="Background" Value="Transparent"/>
+                                            <Setter Property="BorderThickness" Value="0"/>
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                            <Setter Property="Padding" Value="0"/>
+                                            <Setter Property="Margin" Value="0"/>
+                                            <EventSetter Event="PreviewMouseLeftButtonDown"
+                                                         Handler="TunnelItem_MouseDown"/>
+                                            <Style.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter Property="Background" Value="{DynamicResource ListHover}"/>
+                                                </Trigger>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter Property="Background" Value="{DynamicResource ListSelected}"/>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ListView.ItemContainerStyle>
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="4"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <!-- Group colour strip -->
+                                                <Rectangle Grid.Column="0"
+                                                           Fill="{Binding GroupAccentBrush}"
+                                                           RadiusX="2" RadiusY="2"
+                                                           Margin="2,3,2,3"/>
+                                                <!-- Row content -->
+                                                <Grid Grid.Column="1" Margin="6,5,8,5">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="3*"/>
+                                                        <ColumnDefinition Width="1.2*"/>
+                                                        <ColumnDefinition Width="1.5*"/>
+                                                        <ColumnDefinition Width="Auto" MinWidth="0"/>
+                                                        <ColumnDefinition Width="1.5*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Grid.Column="0"
+                                                                Orientation="Horizontal"
+                                                                VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Name}"
+                                                                   Foreground="{DynamicResource TextPrimary}"
+                                                                   TextDecorations="{Binding NameDecoration}"
+                                                                   FontSize="11"
+                                                                   ToolTip="{Binding Notes}"
+                                                                   VerticalAlignment="Center"/>
+                                                        <TextBlock Text=" ⚡"
+                                                                   Foreground="{DynamicResource Accent}"
+                                                                   FontSize="9"
+                                                                   VerticalAlignment="Center"
+                                                                   ToolTip="Default action tunnel"
+                                                                   Visibility="{Binding DefaultBadgeVis}"/>
+                                                        <TextBlock Text=" 🔓"
+                                                                   Foreground="{DynamicResource Success}"
+                                                                   FontSize="9"
+                                                                   VerticalAlignment="Center"
+                                                                   ToolTip="Open network protection tunnel"
+                                                                   Visibility="{Binding OpenBadgeVis}"/>
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="1"
+                                                               Text="{Binding TypeLabel}"
+                                                               Foreground="{Binding TypeColor}"
+                                                               FontSize="10"
+                                                               VerticalAlignment="Center"/>
+                                                    <TextBlock Grid.Column="2"
+                                                               Text="{Binding StatusText}"
+                                                               Foreground="{Binding StatusColor}"
+                                                               FontSize="11"
+                                                               VerticalAlignment="Center"/>
+                                                    <TextBlock Grid.Column="3"
+                                                               Text="{Binding RuleCount}"
+                                                               Foreground="{Binding RuleCountColor}"
+                                                               TextDecorations="{Binding RuleCountDecoration}"
+                                                               FontSize="10"
+                                                               HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center"
+                                                               Cursor="Hand"
+                                                               Padding="4,0"
+                                                               ToolTip="{Binding RuleCountTooltip}"
+                                                               Visibility="{Binding DataContext.RulesColumnVisibility, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                               MouseLeftButtonDown="RuleCount_Click"/>
+                                                    <Button Grid.Column="4"
+                                                            Content="{Binding ButtonLabel}"
+                                                            IsEnabled="{Binding ButtonEnabled}"
+                                                            ToolTip="{Binding ButtonTooltip}"
+                                                            Click="TunnelToggle_Click"
+                                                            Padding="6,2" FontSize="10"
+                                                            HorizontalAlignment="Center"
+                                                            Style="{StaticResource FlatBtn}"/>
+                                                </Grid>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                            </Grid>
                         </Border>
 
-                        <!-- The active-tab ListView — ItemsSource swapped by RebuildTunnelGroups -->
-                        <ListView Grid.Row="2" x:Name="TunnelsListView"
-                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                  SelectionChanged="TunnelsListView_SelectionChanged">
-                            <ListView.View>
-                                <GridView>
-                                    <GridViewColumn Header="{Binding [TunnelColName], Source={x:Static local:Lang.Instance}}" Width="150">
-                                        <GridViewColumn.CellTemplate>
-                                            <DataTemplate>
-                                                <TextBlock Text="{Binding Name}"
-                                                           Foreground="{Binding NameColor}"
-                                                           TextDecorations="{Binding NameDecoration}"
-                                                           FontSize="11"
-                                                           ToolTip="{Binding Notes}"/>
-                                            </DataTemplate>
-                                        </GridViewColumn.CellTemplate>
-                                    </GridViewColumn>
-                                    <GridViewColumn Header="{Binding [TunnelColType], Source={x:Static local:Lang.Instance}}" Width="65">
-                                        <GridViewColumn.CellTemplate>
-                                            <DataTemplate>
-                                                <TextBlock Text="{Binding TypeLabel}"
-                                                           Foreground="{Binding TypeColor}"
-                                                           FontSize="10"/>
-                                            </DataTemplate>
-                                        </GridViewColumn.CellTemplate>
-                                    </GridViewColumn>
-                                    <GridViewColumn Header="{Binding [TunnelColStatus], Source={x:Static local:Lang.Instance}}" Width="90">
-                                        <GridViewColumn.CellTemplate>
-                                            <DataTemplate>
-                                                <TextBlock Text="{Binding StatusText}"
-                                                           Foreground="{Binding StatusColor}" FontSize="11"/>
-                                            </DataTemplate>
-                                        </GridViewColumn.CellTemplate>
-                                    </GridViewColumn>
-                                    <GridViewColumn Header="{Binding [TunnelColAction], Source={x:Static local:Lang.Instance}}" Width="90">
-                                        <GridViewColumn.CellTemplate>
-                                            <DataTemplate>
-                                                <Button Content="{Binding ButtonLabel}"
-                                                        IsEnabled="{Binding ButtonEnabled}"
-                                                        ToolTip="{Binding ButtonTooltip}"
-                                                        Click="TunnelToggle_Click"
-                                                        Padding="8,2" FontSize="10"
-                                                        Style="{StaticResource FlatBtn}"/>
-                                            </DataTemplate>
-                                        </GridViewColumn.CellTemplate>
-                                    </GridViewColumn>
-                                </GridView>
-                            </ListView.View>
-                        </ListView>
-
                         <!-- Tunnel management buttons -->
-                        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,6,0,0">
+                        <StackPanel Grid.Column="0" Grid.Row="2" Orientation="Horizontal" Margin="0,6,0,0">
                             <Button Content="{Binding [BtnAddTunnel], Source={x:Static local:Lang.Instance}}"
                                     x:Name="AddTunnelBtn"
                                     Style="{StaticResource SuccessBtn}" FontSize="10" Padding="10,3"
@@ -304,53 +395,241 @@
                                     Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
                                     Margin="6,0,0,0"
                                     Click="ImportTunnel_Click"/>
+                            <Button Content="{Binding [BtnDefaults], Source={x:Static local:Lang.Instance}}"
+                                    x:Name="DefaultsBtn"
+                                    Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
+                                    Margin="6,0,0,0"
+                                    Click="DefaultsBtn_Click"/>
                             <Button x:Name="DeleteTunnelBtn"
                                     Style="{StaticResource DangerBtn}" FontSize="10" Padding="10,3"
                                     Margin="6,0,0,0" IsEnabled="False" Visibility="Collapsed"
                                     Click="DeleteTunnel_Click"/>
                         </StackPanel>
 
-                    </Grid>
+                        <!-- WIFI RULES section — row 3 header, row 4 content -->
+                        <StackPanel Grid.Column="0" Grid.Row="3"
+                                    x:Name="WifiRulesHeader"
+                                    Orientation="Horizontal"
+                                    Margin="0,12,0,6"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="{Binding [SectionWifiRules], Source={x:Static local:Lang.Instance}}"
+                                       Style="{StaticResource SectionLabel}" Margin="0,0,6,0"
+                                       VerticalAlignment="Center"/>
+                            <Border Background="{DynamicResource BorderColor}"
+                                    CornerRadius="8" Padding="6,1"
+                                    VerticalAlignment="Center" HorizontalAlignment="Left">
+                                <TextBlock x:Name="WifiRuleCountLabel"
+                                           FontSize="9" Foreground="{DynamicResource TextMuted}" Text="0"/>
+                            </Border>
+                        </StackPanel>
 
-                    <!-- RIGHT: Activity Log -->
-                    <Grid Grid.Column="2">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-
-                        <!-- ACTIVITY LOG header -->
-                        <Grid Grid.Row="0" Margin="0,0,0,4">
-                            <TextBlock Text="{Binding [ActivityLogHeader], Source={x:Static local:Lang.Instance}}"
-                                       Style="{StaticResource SectionLabel}" Margin="0"/>
-                        </Grid>
-
-                        <!-- Log content -->
-                        <Border Grid.Row="1"
+                        <Border Grid.Column="0" Grid.Row="4"
+                                x:Name="WifiRulesPanel"
                                 Background="{DynamicResource CardBg}"
                                 BorderBrush="{DynamicResource BorderColor}" BorderThickness="1"
                                 CornerRadius="{DynamicResource Theme.CornerRadius}">
-                            <RichTextBox x:Name="LogBox"
-                                         Background="Transparent"
-                                         Foreground="{DynamicResource TextMuted}"
-                                         FontSize="10"
-                                         BorderThickness="0" IsReadOnly="True"
-                                         Padding="8"
-                                         VerticalScrollBarVisibility="Auto"
-                                         HorizontalScrollBarVisibility="Disabled">
-                                <FlowDocument x:Name="LogDocument"/>
-                            </RichTextBox>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+
+                                <!-- Column header bar -->
+                                <Border Grid.Row="0"
+                                        Background="{DynamicResource Surface}"
+                                        BorderBrush="{DynamicResource BorderColor}"
+                                        BorderThickness="0,0,0,1"
+                                        CornerRadius="{DynamicResource Theme.CornerRadiusTop}">
+                                    <Grid Margin="8,5">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="3*"/>
+                                            <ColumnDefinition Width="2*"/>
+                                            <ColumnDefinition Width="1.5*"/>
+                                            <ColumnDefinition Width="40"/>
+                                            <ColumnDefinition Width="2*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding [RuleColName],   Source={x:Static local:Lang.Instance}}" FontSize="10" Foreground="{DynamicResource TextMuted}"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding [RuleColSsid],   Source={x:Static local:Lang.Instance}}" FontSize="10" Foreground="{DynamicResource TextMuted}"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding [RuleColAction], Source={x:Static local:Lang.Instance}}" FontSize="10" Foreground="{DynamicResource TextMuted}"/>
+                                        <TextBlock Grid.Column="3" Text="{Binding [RuleColCount],  Source={x:Static local:Lang.Instance}}" FontSize="10" Foreground="{DynamicResource TextMuted}" HorizontalAlignment="Center"/>
+                                        <TextBlock Grid.Column="4" Text="{Binding [RuleColTunnel], Source={x:Static local:Lang.Instance}}" FontSize="10" Foreground="{DynamicResource TextMuted}"/>
+                                    </Grid>
+                                </Border>
+
+                                <!-- Rule rows -->
+                                <ListView Grid.Row="1" x:Name="WifiRulesListView"
+                                          Background="Transparent" BorderThickness="0"
+                                          ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                          MaxHeight="160"
+                                          IsHitTestVisible="True"
+                                          AllowDrop="True"
+                                          PreviewMouseLeftButtonDown="WifiRule_PreviewMouseDown"
+                                          PreviewMouseMove="WifiRule_PreviewMouseMove"
+                                          Drop="WifiRule_Drop"
+                                          SelectionChanged="WifiRulesListView_SelectionChanged">
+                                    <ListView.ItemContainerStyle>
+                                        <Style TargetType="ListViewItem">
+                                            <Setter Property="Background"               Value="Transparent"/>
+                                            <Setter Property="BorderThickness"          Value="0"/>
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                            <Setter Property="Padding"                  Value="0"/>
+                                            <Setter Property="Margin"                   Value="0"/>
+                                            <Style.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter Property="Background" Value="{DynamicResource ListHover}"/>
+                                                </Trigger>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter Property="Background" Value="{DynamicResource ListSelected}"/>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ListView.ItemContainerStyle>
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="{Binding RowBg}"
+                                                    BorderBrush="{Binding BorderBrush}"
+                                                    BorderThickness="{Binding BorderThick}">
+                                                <Grid Margin="8,4">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="3*"/>
+                                                        <ColumnDefinition Width="2*"/>
+                                                        <ColumnDefinition Width="1.5*"/>
+                                                        <ColumnDefinition Width="40"/>
+                                                        <ColumnDefinition Width="2*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0"
+                                                               Text="{Binding RuleName}"
+                                                               Foreground="{DynamicResource TextPrimary}"
+                                                               FontSize="11" VerticalAlignment="Center"
+                                                               TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock Grid.Column="1"
+                                                               Text="{Binding Ssid}"
+                                                               Foreground="{DynamicResource TextMuted}"
+                                                               FontSize="10" VerticalAlignment="Center"
+                                                               TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock Grid.Column="2"
+                                                               Text="{Binding ActionLabel}"
+                                                               Foreground="{DynamicResource Accent}"
+                                                               FontSize="10" VerticalAlignment="Center"/>
+                                                    <TextBlock Grid.Column="3"
+                                                               Text="{Binding ExecutionCountText}"
+                                                               Foreground="{Binding ExecutionCountColor}"
+                                                               FontSize="10" HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center"/>
+                                                    <TextBlock Grid.Column="4"
+                                                               Text="{Binding TunnelName}"
+                                                               Foreground="{Binding TunnelFg}"
+                                                               FontWeight="{Binding TunnelFontWeight}"
+                                                               FontSize="10" VerticalAlignment="Center"
+                                                               TextTrimming="CharacterEllipsis"/>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                            </Grid>
                         </Border>
 
-                        <!-- Export button -->
-                        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,6,0,0">
-                            <Button Content="{Binding [BtnExportLog], Source={x:Static local:Lang.Instance}}"
+                        <!-- WiFi Rules edit buttons — outside the box, same level as tunnel buttons -->
+                        <StackPanel Grid.Column="0" Grid.Row="5"
+                                    Orientation="Horizontal" Margin="0,6,0,0"
+                                    x:Name="WifiRuleButtonsPanel">
+                            <Button x:Name="WifiRuleAddBtn"
+                                    Content="{Binding [BtnAddRule], Source={x:Static local:Lang.Instance}}"
                                     Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
-                                    Click="ExportLog_Click"/>
+                                    Click="WifiRuleAdd_Click"/>
+                            <Button x:Name="WifiRuleEditBtn"
+                                    Content="{Binding [BtnEditRule], Source={x:Static local:Lang.Instance}}"
+                                    Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
+                                    Margin="6,0,0,0" IsEnabled="False"
+                                    Click="WifiRuleEdit_Click"/>
+                            <Button x:Name="WifiRuleDeleteBtn"
+                                    Content="{Binding [BtnDeleteRule], Source={x:Static local:Lang.Instance}}"
+                                    Style="{StaticResource DangerBtn}" FontSize="10" Padding="10,3"
+                                    Margin="6,0,0,0" IsEnabled="False"
+                                    Click="WifiRuleDelete_Click"/>
                         </StackPanel>
 
-                    </Grid>
+                    <!-- RIGHT: Activity Log — self-contained, spans all left rows -->
+                        <Grid Grid.Column="2" Grid.Row="0" Grid.RowSpan="6">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- ACTIVITY LOG header -->
+                            <Grid Grid.Row="0" Margin="0,0,0,6" MinHeight="24">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="{Binding [ActivityLogHeader], Source={x:Static local:Lang.Instance}}"
+                                           Style="{StaticResource SectionLabel}" Margin="0"
+                                           VerticalAlignment="Center"/>
+                                <Border Grid.Column="1"
+                                        Background="{DynamicResource BorderColor}"
+                                        CornerRadius="8" Padding="6,1" Margin="6,0,0,0"
+                                        VerticalAlignment="Center" HorizontalAlignment="Left">
+                                    <TextBlock x:Name="LogCountLabel"
+                                               FontSize="9" Foreground="{DynamicResource TextMuted}" Text="0"/>
+                                </Border>
+                            </Grid>
+
+                            <!-- Log content -->
+                            <Border Grid.Row="1"
+                                    Background="{DynamicResource CardBg}"
+                                    BorderBrush="{DynamicResource BorderColor}" BorderThickness="1"
+                                    CornerRadius="{DynamicResource Theme.CornerRadius}">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Column header bar -->
+                                    <Border Grid.Row="0"
+                                            Background="{DynamicResource Surface}"
+                                            BorderBrush="{DynamicResource BorderColor}"
+                                            BorderThickness="0,0,0,1"
+                                            CornerRadius="{DynamicResource Theme.CornerRadiusTop}">
+                                        <Grid Margin="8,5">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="62"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding [LogColTime], Source={x:Static local:Lang.Instance}}"
+                                                       FontSize="10" Foreground="{DynamicResource TextMuted}"/>
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding [LogColEvent], Source={x:Static local:Lang.Instance}}"
+                                                       FontSize="10" Foreground="{DynamicResource TextMuted}"/>
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- Log entries -->
+                                    <RichTextBox Grid.Row="1" x:Name="LogBox"
+                                                 Background="Transparent"
+                                                 Foreground="{DynamicResource TextMuted}"
+                                                 FontSize="10"
+                                                 BorderThickness="0" IsReadOnly="True"
+                                                 Padding="8,6"
+                                                 VerticalScrollBarVisibility="Auto"
+                                                 HorizontalScrollBarVisibility="Disabled">
+                                        <FlowDocument x:Name="LogDocument"/>
+                                    </RichTextBox>
+                                </Grid>
+                            </Border>
+
+                            <!-- Export button -->
+                            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,6,0,0">
+                                <Button Content="{Binding [BtnExportLog], Source={x:Static local:Lang.Instance}}"
+                                        Style="{StaticResource FlatBtn}" FontSize="10" Padding="10,3"
+                                        Click="ExportLog_Click"/>
+                            </StackPanel>
+                        </Grid>
+
                 </Grid>
 
                 <!-- ── Footer ─────────────────────────────────────────────── -->
@@ -359,12 +638,34 @@
                     <Grid Margin="14,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock x:Name="FooterLabel" Grid.Column="0"
                                    Foreground="{DynamicResource TextMuted}" FontSize="10"
                                    VerticalAlignment="Center"/>
-                        <TextBlock x:Name="AdminLabel" Grid.Column="1"
+                        <!-- Centre: default action + open protection — truly centred -->
+                        <StackPanel Grid.Column="1"
+                                    Orientation="Horizontal"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center">
+                            <TextBlock x:Name="DefaultTunnelLabel"
+                                       Foreground="{DynamicResource Accent}"
+                                       FontSize="10" VerticalAlignment="Center"
+                                       Visibility="Collapsed"
+                                       ToolTip="Default action tunnel — activates when no WiFi rule matches"
+                                       ToolTipService.InitialShowDelay="800"/>
+                            <Rectangle Width="1" Height="12" Margin="10,0"
+                                       Fill="{DynamicResource BorderColor}" VerticalAlignment="Center"
+                                       x:Name="StatusCentreSep" Visibility="Collapsed"/>
+                            <TextBlock x:Name="OpenProtectionLabel"
+                                       Foreground="{DynamicResource Success}"
+                                       FontSize="10" VerticalAlignment="Center"
+                                       Visibility="Collapsed"
+                                       ToolTip="Open network protection — activates automatically on passwordless WiFi"
+                                       ToolTipService.InitialShowDelay="800"/>
+                        </StackPanel>
+                        <TextBlock x:Name="AdminLabel" Grid.Column="2"
                                    HorizontalAlignment="Right" FontSize="10"
                                    VerticalAlignment="Center"/>
                     </Grid>
